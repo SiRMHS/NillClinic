@@ -1,0 +1,23 @@
+{
+  "name": "jordan-clinic-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "داشبورد مدیریتی تحلیلی کلینیک جردن",
+  "scripts": {
+    "dev": "pnpm --filter @jordan/api --filter @jordan/web --parallel dev",
+    "dev:api": "pnpm --filter @jordan/api dev",
+    "dev:web": "pnpm --filter @jordan/web dev",
+    "build": "pnpm run -r build",
+    "test": "pnpm run -r test",
+    "lint": "pnpm run -r lint",
+    "db:generate": "pnpm --filter @jordan/db generate",
+    "db:migrate": "pnpm --filter @jordan/db migrate",
+    "db:push": "pnpm --filter @jordan/db push",
+    "db:studio": "pnpm --filter @jordan/db studio"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.14.0",
+  "devDependencies": {}
+}

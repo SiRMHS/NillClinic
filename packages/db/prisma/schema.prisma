@@ -1,0 +1,278 @@
+// Jordan Clinic Dashboard — Core Data Layer (Layer 1)
+// See docs/DATA_MODEL.md for field semantics and encryption notes.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth & RBAC ───
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  label       String?  @map("label")
+  description String?
+  permissions String[]  // array of permission keys like ["dashboard", "patients.view", ...]
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  fullName  String?  @map("full_name")
+  password  String?  // bcrypt hash
+  roleId    String?  @map("role_id")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  role         Role?             @relation(fields: [roleId], references: [id])
+  auditLogs    AuditLog[]
+  interactions LeadInteraction[]
+
+  @@map("users")
+}
+
+// ─── CRM-synced entities (Jordan API) ───
+
+model Patient {
+  id              String   @id @default(cuid())
+  externalCode    Int      @unique @map("external_code")
+  fullNameEnc     String   @map("full_name_enc")
+  fullName        String?  @map("full_name")
+  mobileEnc       String?  @map("mobile_enc")
+  mobile          String?  @map("mobile")
+  telEnc          String?  @map("tel_enc")
+  gender          Int?
+  addressEnc      String?  @map("address_enc")
+  degree          String?
+  fatherNameEnc   String?  @map("father_name_enc")
+  birthDate       String?  @map("birth_date")
+  residentCountry String?  @map("resident_country")
+  introduction    Int?
+  job             String?
+  isResident      Boolean? @map("is_resident")
+  syncedAt        DateTime @map("synced_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  treatments Treatment[]
+  reserves   Reserve[]
+  leads      Lead[]      @relation("LeadConvertedPatient")
+
+  @@index([fullName])
+  @@index([mobile])
+  @@index([syncedAt])
+  @@map("patients")
+}
+
+model Service {
+  id           String   @id @default(cuid())
+  externalId   Int      @unique @map("external_id") // srvId
+  name         String
+  sectionName  String   @map("section_name")
+  sectionId    Int      @map("section_id")
+  tariff       Float    @default(0)
+  syncedAt     DateTime @map("synced_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("services")
+}
+
+model Reserve {
+  id           String   @id @default(cuid())
+  patientId    String?  @map("patient_id")
+  reserveDate  String   @map("reserve_date")
+  reserveTime  String   @map("reserve_time")
+  servicesRaw  String?  @map("services_raw")
+  createDate   String?  @map("create_date")
+  createTime   String?  @map("create_time")
+  isAccepted   Boolean  @default(false) @map("is_accepted")
+  doctorName   String   @map("doctor_name")
+  syncedAt     DateTime @map("synced_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  patient Patient? @relation(fields: [patientId], references: [id])
+
+  @@index([reserveDate])
+  @@index([doctorName])
+  @@unique([reserveDate, reserveTime, doctorName])
+  @@map("reserves")
+}
+
+model Treatment {
+  id               String   @id @default(cuid())
+  externalId       String   @unique @map("external_id") // treatmentPlanId
+  patientId        String?  @map("patient_id")
+  externalPatientCode Int   @map("external_patient_code")
+  planDate         String   @map("plan_date")
+  planName         String   @map("plan_name")
+  planUser         String   @map("plan_user")
+  reasonName       String?  @map("reason_name")
+  detailsJson      Json     @map("details_json")
+  isDeleted        Boolean  @default(false) @map("is_deleted")
+  syncedAt         DateTime @map("synced_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  patient Patient? @relation(fields: [patientId], references: [id])
+
+  @@index([externalPatientCode])
+  @@index([planUser])
+  @@index([planDate])
+  @@map("treatments")
+}
+
+// ─── Lead System (Layer 4) ───
+
+enum LeadSource {
+  INSTAGRAM
+  WHATSAPP
+  SITE
+  MANUAL
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  CONVERTED
+  LOST
+}
+
+model Lead {
+  id              String     @id @default(cuid())
+  source          LeadSource
+  status          LeadStatus @default(NEW)
+  fullNameEnc     String?    @map("full_name_enc")
+  mobileEnc       String?    @map("mobile_enc")
+  metadata        Json       @default("{}")
+  externalRef     String?    @map("external_ref") // Manychat / n8n id
+  convertedPatientId String? @map("converted_patient_id")
+  contactedAt     DateTime?  @map("contacted_at")
+  convertedAt     DateTime?  @map("converted_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  convertedPatient Patient? @relation("LeadConvertedPatient", fields: [convertedPatientId], references: [id])
+
+  interactions LeadInteraction[]
+
+  @@index([source, status])
+  @@index([createdAt])
+  @@map("leads")
+}
+
+model LeadInteraction {
+  id        String   @id @default(cuid())
+  leadId    String   @map("lead_id")
+  userId    String?  @map("user_id")
+  type      String   // "NOTE" | "CALL" | "REPORT" | "MESSAGE"
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@map("lead_interactions")
+}
+
+// ─── Sync Engine (Layer 2) ───
+
+enum SyncEntity {
+  PATIENTS
+  SERVICES
+  RESERVES
+  TREATMENTS
+}
+
+enum SyncStatus {
+  STARTED
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum SyncTrigger {
+  CRON
+  MANUAL
+}
+
+model SyncLog {
+  id           String      @id @default(cuid())
+  entity       SyncEntity
+  status       SyncStatus
+  trigger      SyncTrigger
+  recordsRead  Int         @default(0) @map("records_read")
+  recordsUpserted Int      @default(0) @map("records_upserted")
+  recordsFailed Int       @default(0) @map("records_failed")
+  errorMessage String?     @map("error_message")
+  startedAt    DateTime    @default(now()) @map("started_at")
+  finishedAt   DateTime?   @map("finished_at")
+  metadata     Json        @default("{}")
+
+  @@index([entity, startedAt])
+  @@map("sync_logs")
+}
+
+// ─── Security / Audit (Layer 5) ───
+
+// ─── Webhook Log (Layer 6) ───
+
+model WebhookLog {
+  id          String   @id @default(cuid())
+  source      String   @map("source")          // "instagram" | "whatsapp" | "site"
+  action      String   @map("action")          // "received" | "duplicate" | "created" | "rejected"
+  name        String?  @map("name")
+  phone       String?  @map("phone")
+  externalRef String?  @map("external_ref")
+  ipAddress   String?  @map("ip_address")
+  metadata    Json     @default("{}")
+  errorMsg    String?  @map("error_msg")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([source, action])
+  @@map("webhook_logs")
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  SYNC_MANUAL
+  LEAD_CREATE
+  LEAD_UPDATE
+  LEAD_CONVERT
+  PATIENT_VIEW
+  EXPORT
+  ROLE_CHANGE
+  WEBHOOK_RECEIVED
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  userId    String?     @map("user_id")
+  action    AuditAction
+  resource  String?
+  metadata  Json        @default("{}")
+  ipAddress String?     @map("ip_address")
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
