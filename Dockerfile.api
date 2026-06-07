@@ -12,24 +12,30 @@ COPY packages/shared packages/shared/
 COPY sync-engine sync-engine/
 RUN pnpm install --frozen-lockfile
 
-# ۱. ابتدا بیلد کردن پکیج اشتراکی
 RUN pnpm --filter @jordan/shared build
-
-# ۲. 👈 اول تولید کلاینت پریزما (تا تایپ‌ها و متدها ساخته شوند)
 RUN pnpm --filter @jordan/db generate
-
-# ۳. 👈 سپس بیلد کردن پکیج دیتابیس با تایپ‌اسکریپت
 RUN pnpm --filter @jordan/db build
-
-# ۴. بیلد بقیه پکیج‌ها
 RUN pnpm --filter @jordan/sync-engine build
 RUN pnpm --filter @jordan/api build
-RUN pnpm deploy --filter @jordan/api /tmp/deployed
 
-FROM node:20-alpine AS runner
+FROM base AS runner
 RUN apk add --no-cache tini
 WORKDIR /app
-COPY --from=build /tmp/deployed .
+
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --from=build /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY --from=build /app/apps/api/dist ./apps/api/dist
+COPY --from=build /app/apps/api/package.json ./apps/api/package.json
+COPY --from=build /app/packages/db/dist ./packages/db/dist
+COPY --from=build /app/packages/db/package.json ./packages/db/package.json
+COPY --from=build /app/packages/db/prisma ./packages/db/prisma
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=build /app/sync-engine/dist ./sync-engine/dist
+COPY --from=build /app/sync-engine/package.json ./sync-engine/package.json
+
 EXPOSE 4000
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "dist/index.js"]
+CMD ["node", "apps/api/dist/index.js"]
