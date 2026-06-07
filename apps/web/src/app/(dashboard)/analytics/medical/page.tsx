@@ -20,6 +20,8 @@ import {
 import type { ChartOptions } from "chart.js"
 import { Bar } from "react-chartjs-2"
 
+type TooltipFont = NonNullable<NonNullable<ChartOptions<"bar">["plugins"]>["tooltip"]>["bodyFont"]
+
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Filler)
 
 interface DiagnosiDetail {
@@ -137,7 +139,7 @@ export default function MedicalAnalyticsPage() {
     indexAxis: "y",
     plugins: {
       legend: { display: false },
-      tooltip: { bodyFont: { family: fontCfg.font.family, size: fontCfg.font.size } as unknown as ChartOptions<"bar">["plugins"]["tooltip"]["bodyFont"], titleFont: { family: fontCfg.font.family, size: fontCfg.font.size } as unknown as ChartOptions<"bar">["plugins"]["tooltip"]["titleFont"] },
+      tooltip: { bodyFont: { family: fontCfg.font.family, size: fontCfg.font.size } as TooltipFont, titleFont: { family: fontCfg.font.family, size: fontCfg.font.size } as TooltipFont },
     },
     scales: {
       x: { ticks: fontCfg, beginAtZero: true },
