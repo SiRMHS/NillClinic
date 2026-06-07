@@ -11,9 +11,17 @@ COPY packages/db packages/db/
 COPY packages/shared packages/shared/
 COPY sync-engine sync-engine/
 RUN pnpm install --frozen-lockfile
+
+# ۱. ابتدا بیلد کردن پکیج اشتراکی
 RUN pnpm --filter @jordan/shared build
-RUN pnpm --filter @jordan/db build
+
+# ۲. 👈 اول تولید کلاینت پریزما (تا تایپ‌ها و متدها ساخته شوند)
 RUN pnpm --filter @jordan/db generate
+
+# ۳. 👈 سپس بیلد کردن پکیج دیتابیس با تایپ‌اسکریپت
+RUN pnpm --filter @jordan/db build
+
+# ۴. بیلد بقیه پکیج‌ها
 RUN pnpm --filter @jordan/sync-engine build
 RUN pnpm --filter @jordan/api build
 RUN pnpm deploy --filter @jordan/api /tmp/deployed
