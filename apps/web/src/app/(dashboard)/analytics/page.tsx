@@ -75,7 +75,7 @@ function chartTextConfig(size = 11) {
   return { ...font, size }
 }
 
-const commonOpts = {
+const commonOpts: ChartOptions = {
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
