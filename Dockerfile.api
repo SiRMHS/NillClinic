@@ -25,7 +25,7 @@ RUN pnpm --filter @jordan/shared build \
 
 # pnpm deploy bundles workspace deps (@jordan/db, sync-engine, …)
 # as real files — no broken symlinks at runtime.
-RUN pnpm --filter @jordan/api deploy --prod /prod/api
+RUN pnpm --filter @jordan/api deploy --prod --legacy /prod/api
 
 # ── Runner stage ─────────────────────────────────────────
 FROM base AS runner
