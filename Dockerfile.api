@@ -4,33 +4,51 @@ ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /app
 
+# ========================================================
+# Stage 1: Build (نصب وابستگی‌ها و کامپایل کدها)
+# ========================================================
 FROM base AS build
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY apps/api apps/api/
 COPY packages/db packages/db/
 COPY packages/shared packages/shared/
 COPY sync-engine sync-engine/
+
 RUN pnpm install --frozen-lockfile
 
+# ترتیب حیاتی بیلد پکیج‌ها برای حفظ وابستگی‌ها
 RUN pnpm --filter @jordan/shared build
 RUN pnpm --filter @jordan/db generate
 RUN pnpm --filter @jordan/db build
 RUN pnpm --filter @jordan/sync-engine build
 RUN pnpm --filter @jordan/api build
 
+# ========================================================
+# Stage 2: Runner (ایمیج سبک و نهایی پروداکشن)
+# ========================================================
 FROM base AS runner
-RUN apk add --no-cache tini
+# نصب ابزارهای مورد نیاز برای باینری‌های پریزما و سیستم‌عامل
+RUN apk add --no-cache tini openssl ca-certificates
 WORKDIR /app
 
+ENV NODE_ENV=production
+
+# ۱. کپی کردن ماژول‌ها و ساختار ریشه مونو-ریپو
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=build /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+
+# ۲. کپی کردن بک‌اند اصلی با حفظ دقیق مسیر فولدرها
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
+
+# ۳. کپی کردن پکیج دیتابیس (شامل کلاینت تولید شده پریزما و ساختار پکیج)
 COPY --from=build /app/packages/db/dist ./packages/db/dist
 COPY --from=build /app/packages/db/package.json ./packages/db/package.json
 COPY --from=build /app/packages/db/prisma ./packages/db/prisma
+
+# ۴. کپی کردن پکیج‌های اشتراکی و موتور همگام‌سازی
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/sync-engine/dist ./sync-engine/dist
