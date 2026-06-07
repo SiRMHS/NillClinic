@@ -27,6 +27,12 @@ RUN pnpm --filter @jordan/shared build \
 # as real files — no broken symlinks at runtime.
 RUN pnpm --filter @jordan/api deploy --prod --legacy /prod/api
 
+# deploy creates a fresh node_modules without the generated Prisma engine artifacts
+RUN DEPLOY_CLIENT_DIR="$(find /prod/api/node_modules/.pnpm -path '*/node_modules/@prisma/client' -type d | head -1)" \
+ && DEPLOY_NODE_MODULES="$(dirname "$(dirname "$DEPLOY_CLIENT_DIR")")" \
+ && BUILD_PRISMA_DIR="$(find /app/node_modules/.pnpm -path '*/node_modules/.prisma' -type d | head -1)" \
+ && cp -r "$BUILD_PRISMA_DIR" "$DEPLOY_NODE_MODULES/"
+
 # ── Runner stage ─────────────────────────────────────────
 FROM base AS runner
 RUN apk add --no-cache tini openssl ca-certificates wget \
