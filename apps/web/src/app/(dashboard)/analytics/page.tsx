@@ -20,6 +20,8 @@ import {
 import type { ChartOptions } from "chart.js"
 import { Doughnut, Bar, Line } from "react-chartjs-2"
 
+type TooltipFont = NonNullable<NonNullable<ChartOptions<"bar">["plugins"]>["tooltip"]>["bodyFont"]
+
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Filler)
 
 interface PopularityData { name: string; count: number }
@@ -73,14 +75,14 @@ function chartTextConfig(size = 11) {
   return { ...font, size }
 }
 
-const commonOpts = {
+const commonOpts: ChartOptions<"bar"> = {
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
     legend: { labels: { ...font, boxWidth: 12, padding: 12 } },
-    tooltip: { bodyFont: font as unknown as ChartJS["options"]["plugins"]["tooltip"]["bodyFont"], titleFont: font as unknown as ChartJS["options"]["plugins"]["tooltip"]["titleFont"] },
+    tooltip: { bodyFont: font as TooltipFont, titleFont: font as TooltipFont },
   },
-} as const
+}
 
 const monthNames: Record<string, string> = {
   "01": "فروردین", "02": "اردیبهشت", "03": "خرداد",
