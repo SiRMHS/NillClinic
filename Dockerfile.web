@@ -1,23 +1,32 @@
+# ─────────────────────────────────────────────────────────
+# Jordan Web — production image (built on GitHub Actions)
+# ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /app
 
+# ── Build stage ──────────────────────────────────────────
 FROM base AS build
 ARG BUILD_NEXT_PUBLIC_API_URL=__NEXT_PUBLIC_API_URL_PLACEHOLDER__
 ENV NEXT_PUBLIC_API_URL=$BUILD_NEXT_PUBLIC_API_URL
+
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY apps/web apps/web/
 COPY packages/shared packages/shared/
+
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @jordan/shared build
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm --filter @jordan/web build
 
+# ── Runner stage ─────────────────────────────────────────
 FROM base AS runner
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini wget
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000

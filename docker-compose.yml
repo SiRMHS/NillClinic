@@ -1,3 +1,11 @@
+# ─────────────────────────────────────────────────────────
+# Jordan Clinic Dashboard — server compose (pull from GHCR)
+#
+# On the server:
+#   1. Copy deploy/.env.production.example → .env and fill values
+#   2. docker login ghcr.io -u YOUR_GITHUB_USER -p YOUR_GITHUB_TOKEN
+#   3. docker compose pull && docker compose up -d
+# ─────────────────────────────────────────────────────────
 version: "3.9"
 
 x-logging: &logging
@@ -5,6 +13,11 @@ x-logging: &logging
   options:
     max-size: "10m"
     max-file: "3"
+
+# GHCR image path = ghcr.io/<owner>/<repo>/jordan-{api|web}:<tag>
+# Example repo "Deon/Nill" → GHCR_IMAGE_PREFIX=deon/nill
+x-api-image: &api-image ghcr.io/${GHCR_IMAGE_PREFIX:-your-github-user/nill}/jordan-api:${IMAGE_TAG:-latest}
+x-web-image: &web-image ghcr.io/${GHCR_IMAGE_PREFIX:-your-github-user/nill}/jordan-web:${IMAGE_TAG:-latest}
 
 services:
   postgres:
@@ -27,10 +40,7 @@ services:
       - jordan-network
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-jordan}/jordan-api:${IMAGE_TAG:-latest}
+    image: *api-image
     container_name: jordan-api
     restart: unless-stopped
     depends_on:
@@ -44,33 +54,28 @@ services:
       API_PORT: 4000
       API_URL: ${API_URL:-http://localhost:4000}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
-      JORDAN_API_BASE_URL: ${JORDAN_API_BASE_URL}
-      JORDAN_API_USERNAME: ${JORDAN_API_USERNAME}
-      JORDAN_API_PASSWORD: ${JORDAN_API_PASSWORD}
-      JORDAN_API_COMPANY: ${JORDAN_API_COMPANY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      JORDAN_API_BASE_URL: ${JORDAN_API_BASE_URL:?JORDAN_API_BASE_URL is required}
+      JORDAN_API_USERNAME: ${JORDAN_API_USERNAME:?JORDAN_API_USERNAME is required}
+      JORDAN_API_PASSWORD: ${JORDAN_API_PASSWORD:?JORDAN_API_PASSWORD is required}
+      JORDAN_API_COMPANY: ${JORDAN_API_COMPANY:-Jordan}
       SYNC_CRON_ENABLED: ${SYNC_CRON_ENABLED:-true}
       SYNC_CRON_SCHEDULE: ${SYNC_CRON_SCHEDULE:-0 */6 * * *}
-      LEAD_WEBHOOK_SECRET: ${LEAD_WEBHOOK_SECRET}
+      LEAD_WEBHOOK_SECRET: ${LEAD_WEBHOOK_SECRET:-}
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:4000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 15s
+      retries: 5
+      start_period: 40s
     logging: *logging
     networks:
       - jordan-network
 
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile.web
-      args:
-        BUILD_NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-jordan}/jordan-web:${IMAGE_TAG:-latest}
+    image: *web-image
     container_name: jordan-web
     restart: unless-stopped
     depends_on:
@@ -82,11 +87,11 @@ services:
       NODE_ENV: production
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 15s
+      retries: 5
+      start_period: 40s
     logging: *logging
     networks:
       - jordan-network
@@ -103,8 +108,10 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - nginx-cache:/var/cache/nginx
     depends_on:
-      - api
-      - web
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     logging: *logging
     networks:
       - jordan-network

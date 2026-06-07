@@ -1,12 +1,13 @@
+# ─────────────────────────────────────────────────────────
+# Jordan API — production image (built on GitHub Actions)
+# ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /app
 
-# ========================================================
-# Stage 1: Build (نصب وابستگی‌ها و کامپایل کدها)
-# ========================================================
+# ── Build stage ──────────────────────────────────────────
 FROM base AS build
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY apps/api apps/api/
@@ -16,44 +17,30 @@ COPY sync-engine sync-engine/
 
 RUN pnpm install --frozen-lockfile
 
-# ترتیب حیاتی بیلد پکیج‌ها برای حفظ وابستگی‌ها
-RUN pnpm --filter @jordan/shared build
-RUN pnpm --filter @jordan/db generate
-RUN pnpm --filter @jordan/db build
-RUN pnpm --filter @jordan/sync-engine build
-RUN pnpm --filter @jordan/api build
+RUN pnpm --filter @jordan/shared build \
+ && pnpm --filter @jordan/db generate \
+ && pnpm --filter @jordan/db build \
+ && pnpm --filter @jordan/sync-engine build \
+ && pnpm --filter @jordan/api build
 
-# ========================================================
-# Stage 2: Runner (ایمیج سبک و نهایی پروداکشن)
-# ========================================================
+# pnpm deploy bundles workspace deps (@jordan/db, sync-engine, …)
+# as real files — no broken symlinks at runtime.
+RUN pnpm --filter @jordan/api deploy --prod /prod/api
+
+# ── Runner stage ─────────────────────────────────────────
 FROM base AS runner
-# نصب ابزارهای مورد نیاز برای باینری‌های پریزما و سیستم‌عامل
-RUN apk add --no-cache tini openssl ca-certificates
-WORKDIR /app
+RUN apk add --no-cache tini openssl ca-certificates wget \
+ && npm install -g prisma@6.9.0
 
+WORKDIR /app
 ENV NODE_ENV=production
 
-# ۱. کپی کردن ماژول‌ها و ساختار ریشه مونو-ریپو
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/pnpm-lock.yaml ./pnpm-lock.yaml
-COPY --from=build /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY --from=build /prod/api ./
+COPY --from=build /app/packages/db/prisma ./prisma
 
-# ۲. کپی کردن بک‌اند اصلی با حفظ دقیق مسیر فولدرها
-COPY --from=build /app/apps/api/dist ./apps/api/dist
-COPY --from=build /app/apps/api/package.json ./apps/api/package.json
-
-# ۳. کپی کردن پکیج دیتابیس (شامل کلاینت تولید شده پریزما و ساختار پکیج)
-COPY --from=build /app/packages/db/dist ./packages/db/dist
-COPY --from=build /app/packages/db/package.json ./packages/db/package.json
-COPY --from=build /app/packages/db/prisma ./packages/db/prisma
-
-# ۴. کپی کردن پکیج‌های اشتراکی و موتور همگام‌سازی
-COPY --from=build /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
-COPY --from=build /app/sync-engine/dist ./sync-engine/dist
-COPY --from=build /app/sync-engine/package.json ./sync-engine/package.json
+COPY docker-entrypoint.api.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 4000
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "apps/api/dist/index.js"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
+CMD ["node", "dist/index.js"]
