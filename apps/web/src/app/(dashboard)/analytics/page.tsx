@@ -20,8 +20,6 @@ import {
 import type { ChartOptions } from "chart.js"
 import { Doughnut, Bar, Line } from "react-chartjs-2"
 
-type TooltipFont = NonNullable<NonNullable<ChartOptions<"bar">["plugins"]>["tooltip"]>["bodyFont"]
-
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Filler)
 
 interface PopularityData { name: string; count: number }
@@ -75,14 +73,14 @@ function chartTextConfig(size = 11) {
   return { ...font, size }
 }
 
-const commonOpts: ChartOptions = {
+const commonOpts = {
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
     legend: { labels: { ...font, boxWidth: 12, padding: 12 } },
-    tooltip: { bodyFont: font as TooltipFont, titleFont: font as TooltipFont },
+    tooltip: { bodyFont: font, titleFont: font },
   },
-}
+} satisfies ChartOptions
 
 const monthNames: Record<string, string> = {
   "01": "فروردین", "02": "اردیبهشت", "03": "خرداد",
@@ -377,7 +375,7 @@ export default function AnalyticsPage() {
               <CardContent>
                 <div className="h-52">
                   <ChartWrapper>
-                    <Bar data={ageData} options={{ ...commonOpts, scales: { y: { ticks: { ...chartTextConfig(10) }, beginAtZero: true }, x: { ticks: { ...chartTextConfig(10) } } } }} />
+                    <Bar data={ageData} options={{ ...commonOpts, scales: { y: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, x: { ticks: { font: chartTextConfig(10) } } } }} />
                   </ChartWrapper>
                 </div>
               </CardContent>
@@ -392,7 +390,7 @@ export default function AnalyticsPage() {
               <CardContent>
                 <div className="h-52">
                   <ChartWrapper>
-                    <Bar data={jobData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { ...chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { ...chartTextConfig(10) } } } }} />
+                    <Bar data={jobData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { font: chartTextConfig(10) } } } }} />
                   </ChartWrapper>
                 </div>
               </CardContent>
@@ -409,7 +407,7 @@ export default function AnalyticsPage() {
             <CardContent>
               <div className="h-64">
                 <ChartWrapper>
-                  <Bar data={popData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { ...chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { ...chartTextConfig(10) } } }, plugins: { legend: { display: false }, tooltip: commonOpts.plugins.tooltip } } as ChartOptions<"bar">} />
+                  <Bar data={popData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { font: chartTextConfig(10) } } }, plugins: { legend: { display: false }, tooltip: commonOpts.plugins.tooltip } } as ChartOptions<"bar">} />
                 </ChartWrapper>
               </div>
             </CardContent>
@@ -452,7 +450,7 @@ export default function AnalyticsPage() {
                   <CardContent>
                     <div className="h-72">
                       <ChartWrapper>
-                        <Bar data={catBarData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { ...chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { ...chartTextConfig(9) } } }, plugins: { legend: { display: false }, tooltip: commonOpts.plugins.tooltip } } as ChartOptions<"bar">} />
+                        <Bar data={catBarData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { font: chartTextConfig(9) } } }, plugins: { legend: { display: false }, tooltip: commonOpts.plugins.tooltip } } as ChartOptions<"bar">} />
                       </ChartWrapper>
                     </div>
                   </CardContent>
@@ -551,7 +549,7 @@ export default function AnalyticsPage() {
                   <CardContent>
                     <div className="h-72">
                       <ChartWrapper>
-                        <Line data={trendData} options={{ ...commonOpts, scales: { y: { ticks: { ...chartTextConfig(10) }, beginAtZero: true }, x: { ticks: { ...chartTextConfig(10) } } } }} />
+                        <Line data={trendData} options={{ ...commonOpts, scales: { y: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, x: { ticks: { font: chartTextConfig(10) } } } }} />
                       </ChartWrapper>
                     </div>
                   </CardContent>
