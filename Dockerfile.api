@@ -1,0 +1,27 @@
+FROM node:20-alpine AS base
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
+WORKDIR /app
+
+FROM base AS build
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY apps/api apps/api/
+COPY packages/db packages/db/
+COPY packages/shared packages/shared/
+COPY sync-engine sync-engine/
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @jordan/shared build
+RUN pnpm --filter @jordan/db build
+RUN pnpm --filter @jordan/db generate
+RUN pnpm --filter @jordan/sync-engine build
+RUN pnpm --filter @jordan/api build
+RUN pnpm deploy --filter @jordan/api /tmp/deployed
+
+FROM node:20-alpine AS runner
+RUN apk add --no-cache tini
+WORKDIR /app
+COPY --from=build /tmp/deployed .
+EXPOSE 4000
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "dist/index.js"]

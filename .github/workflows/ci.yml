@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "deploy/**"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+  PNPM_VERSION: "10.14.0"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build dependencies
+        run: |
+          pnpm --filter @jordan/shared build
+          pnpm --filter @jordan/db build
+          pnpm --filter @jordan/db generate
+          pnpm --filter @jordan/sync-engine build
+      - name: TypeCheck all packages
+        run: pnpm --filter @jordan/api --filter @jordan/web --filter @jordan/db --filter @jordan/shared --filter @jordan/sync-engine exec tsc --noEmit
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jordan
+          POSTGRES_PASSWORD: jordan
+          POSTGRES_DB: jordan_dashboard
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql://jordan:jordan@localhost:5432/jordan_dashboard?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build dependencies
+        run: |
+          pnpm --filter @jordan/shared build
+          pnpm --filter @jordan/db build
+          pnpm --filter @jordan/db generate
+          pnpm --filter @jordan/sync-engine build
+          pnpm --filter @jordan/api build
+      - name: Run unit tests
+        run: pnpm test
+        env:
+          NODE_ENV: test
+          JWT_SECRET: test-secret
+          JORDAN_API_BASE_URL: http://localhost:9999
+          JORDAN_API_USERNAME: test
+          JORDAN_API_PASSWORD: test
+          JORDAN_API_COMPANY: test
+          ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAA=="
+          SYNC_CRON_ENABLED: false
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build all packages
+        run: pnpm build
+      - name: Verify Docker build (api)
+        run: docker build . --file Dockerfile.api --tag jordan-api:test
+      - name: Verify Docker build (web)
+        run: docker build . --file Dockerfile.web --tag jordan-web:test --build-arg BUILD_NEXT_PUBLIC_API_URL=http://localhost:4000
