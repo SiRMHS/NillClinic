@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState, useCallback, useRef, useMemo, startTransition } from "react"
-import { usePathname, useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { apiFetch } from "@/lib/api-client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -65,20 +65,12 @@ function fuzzyMatch(text: string, query: string): boolean {
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
-export default function PatientsPage({
-  searchParams: rawParams,
-}: {
-  searchParams: Promise<{ page?: string; search?: string }>
-}) {
+export default function PatientsPage() {
   const pathname = usePathname()
   const router = useRouter()
-  const [resolvedParams, setResolvedParams] = useState<{ page: number; search: string }>({ page: 1, search: "" })
-
-  useEffect(() => {
-    rawParams.then((p) => setResolvedParams({ page: Number(p.page) || 1, search: p.search || "" }))
-  }, [rawParams])
-
-  const { page, search } = resolvedParams
+  const searchParams = useSearchParams()
+  const page = Number(searchParams.get("page")) || 1
+  const search = searchParams.get("search") || ""
 
   const [patients, setPatients] = useState<Patient[]>([])
   const [pagination, setPagination] = useState({ page, pageSize: 20, total: 0, totalPages: 0 })
@@ -119,11 +111,12 @@ export default function PatientsPage({
   }, [search])
 
   function setParam(key: string, value: string) {
-    const p = new URLSearchParams()
-    if (key === "search") p.set("search", value)
-    else p.set(key, value)
+    const p = new URLSearchParams(searchParams.toString())
+    if (value) p.set(key, value)
+    else p.delete(key)
     if (key !== "page") p.delete("page")
-    router.push(`${pathname}?${p.toString()}`)
+    const qs = p.toString()
+    router.push(qs ? `${pathname}?${qs}` : pathname)
   }
 
   function debouncedSearch(value: string) {
