@@ -55,7 +55,28 @@ export const jordanTreatmentSchema = z.object({
   treatmentPlanDeleted: z.boolean(),
 });
 
+export const jordanReceptionDetailSchema = z.object({
+  secId: z.number(),
+  srvId: z.number(),
+  secName: z.string(),
+  srvName: z.string(),
+  receptionPersonnelName: z.string().nullable().optional(),
+});
+
+export const jordanReceptionSchema = z.object({
+  receptionId: z.number(),
+  receptionNo: z.number(),
+  receptionDate: z.string(),
+  patientNo: z.number().nullable(),
+  isReturn: z.union([z.boolean(), z.literal(0), z.literal(1)]).transform((v) => v === true || v === 1),
+  receptionDescription: z.string().nullable().optional(),
+  treatmentItemNames: z.string().nullable().optional(),
+  userName: z.string(),
+  receptionDetailDtos: z.array(jordanReceptionDetailSchema).default([]),
+});
+
 export type JordanService = z.infer<typeof jordanServiceSchema>;
 export type JordanPatient = z.infer<typeof jordanPatientSchema>;
 export type JordanReserve = z.infer<typeof jordanReserveSchema>;
 export type JordanTreatment = z.infer<typeof jordanTreatmentSchema>;
+export type JordanReception = z.infer<typeof jordanReceptionSchema>;

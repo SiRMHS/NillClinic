@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState, useRef, useCallback, startTransition } from "react"
+import { useEffect, useState, useCallback, startTransition } from "react"
 import { apiFetch } from "@/lib/api-client"
+import { useAuth } from "@/stores/auth.store"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,6 +16,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible"
 import {
   RefreshCw,
   Database,
@@ -30,12 +36,13 @@ import {
   ChevronUp,
   Filter,
   Loader2,
+  Bug,
 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
-type SyncEntity = "PATIENTS" | "SERVICES" | "RESERVES" | "TREATMENTS"
+type SyncEntity = "PATIENTS" | "SERVICES" | "RESERVES" | "TREATMENTS" | "RECEPTIONS"
 type SyncStatus = "STARTED" | "SUCCESS" | "PARTIAL" | "FAILED"
 type SyncTrigger = "CRON" | "MANUAL"
 
@@ -48,28 +55,27 @@ interface SyncLog {
   recordsUpserted: number
   recordsFailed: number
   errorMessage?: string
-  metadata?: { pagesProcessed?: number }
+  metadata?: { pagesProcessed?: number; errors?: { recordId: string; message: string }[] }
   startedAt: string
   finishedAt?: string
 }
 
-interface SyncResult {
-  entity: SyncEntity
-  status: SyncStatus
-  recordsRead: number
-  recordsUpserted: number
-  recordsFailed: number
-  pagesProcessed: number
-  errorMessage?: string
+interface ErrorPage {
+  items: { recordId: string; message: string }[]
+  total: number
+  page: number
+  totalPages: number
+  limit: number
 }
 
-const ALL_ENTITIES: SyncEntity[] = ["PATIENTS", "SERVICES", "RESERVES", "TREATMENTS"]
+const ALL_ENTITIES: SyncEntity[] = ["PATIENTS", "SERVICES", "RESERVES", "TREATMENTS", "RECEPTIONS"]
 
 const entityLabels: Record<SyncEntity, string> = {
   PATIENTS: "بیماران",
   SERVICES: "خدمات",
-  RESERVES: "نوبت‌ها",
+  RESERVES: "رزروها",
   TREATMENTS: "طرح‌های درمانی",
+  RECEPTIONS: "پذیرش / نوبت‌ها",
 }
 
 const entityColors: Record<SyncEntity, string> = {
@@ -77,6 +83,7 @@ const entityColors: Record<SyncEntity, string> = {
   SERVICES: "text-emerald-600 dark:text-emerald-400",
   RESERVES: "text-amber-600 dark:text-amber-400",
   TREATMENTS: "text-violet-600 dark:text-violet-400",
+  RECEPTIONS: "text-rose-600 dark:text-rose-400",
 }
 
 const statusConfig: Record<SyncStatus, { label: string; variant: "default" | "secondary" | "outline" | "destructive"; icon: typeof RefreshCw }> = {
@@ -109,108 +116,148 @@ function timeAgo(iso: string) {
   return `${Math.floor(hours / 24)} روز پیش`
 }
 
+interface SyncRunStatus {
+  isRunning: boolean
+  runningEntities: SyncEntity[]
+  hasActiveController?: boolean
+}
+
 export default function SyncPage() {
+  const { user, hasPermission } = useAuth()
   const [logs, setLogs] = useState<SyncLog[]>([])
   const [loading, setLoading] = useState(true)
-  const [syncingEntities, setSyncingEntities] = useState<Set<SyncEntity>>(new Set())
+  const [syncStatus, setSyncStatus] = useState<SyncRunStatus>({ isRunning: false, runningEntities: [] })
   const [showErrors, setShowErrors] = useState<Set<string>>(new Set())
   const [showConfig, setShowConfig] = useState(false)
   const [filterEntity, setFilterEntity] = useState<SyncEntity | "ALL">("ALL")
   const [cancelling, setCancelling] = useState(false)
+  const [purging, setPurging] = useState(false)
+  const [startingSync, setStartingSync] = useState(false)
 
   const [maxPages, setMaxPages] = useState(2)
   const [pageSize, setPageSize] = useState(50)
   const [selectedEntities, setSelectedEntities] = useState<Set<SyncEntity>>(new Set(ALL_ENTITIES))
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const isSyncing = syncingEntities.size > 0
+  const [errorDetails, setErrorDetails] = useState<Record<string, ErrorPage>>({})
+  const [loadingErrors, setLoadingErrors] = useState<Set<string>>(new Set())
+
+  const runningEntities = new Set(syncStatus.runningEntities)
+  const isSyncing = syncStatus.isRunning
+  const isSuperAdmin = hasPermission("*")
 
   const fetchLogs = useCallback(async () => {
     const params = filterEntity !== "ALL" ? `?entity=${filterEntity}` : ""
     return apiFetch<SyncLog[]>(`/api/sync/logs${params}`)
   }, [filterEntity])
 
-  useEffect(() => {
-    fetchLogs().then((data) => startTransition(() => setLogs(data)))
-  }, [fetchLogs])
-
-  useEffect(() => {
-    fetchLogs().then((data) => startTransition(() => { setLogs(data); setLoading(false) }))
-  }, [fetchLogs])
-
-  const startPolling = useCallback(() => {
-    if (pollRef.current) clearInterval(pollRef.current)
-    pollRef.current = setInterval(() => {
-      fetchLogs().then((data) => startTransition(() => setLogs(data)))
-    }, 2000)
-  }, [fetchLogs])
-
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current)
-      pollRef.current = null
-    }
+  const fetchStatus = useCallback(async () => {
+    return apiFetch<SyncRunStatus>("/api/sync/status")
   }, [])
 
-  useEffect(() => {
-    if (isSyncing) {
-      startPolling()
-    } else {
-      stopPolling()
+  const refresh = useCallback(async () => {
+    try {
+      const [status, data] = await Promise.all([fetchStatus(), fetchLogs()])
+      startTransition(() => {
+        setSyncStatus(status)
+        setLogs(data)
+        setLoading(false)
+      })
+    } catch {
+      startTransition(() => setLoading(false))
     }
-    return stopPolling
-  }, [isSyncing, startPolling, stopPolling])
+  }, [fetchStatus, fetchLogs])
+
+  useEffect(() => {
+    void refresh()
+    const id = setInterval(() => { void refresh() }, 2000)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  const purgeData = async () => {
+    if (!confirm("تمام داده‌های CRM (بیماران، خدمات، رزرو، طرح درمان، پذیرش) پاک می‌شوند. ادامه می‌دهید؟")) {
+      return
+    }
+    setPurging(true)
+    try {
+      const purgeRes = await apiFetch<{ ok: boolean; counts: Record<string, number> }>(
+        "/api/sync/purge",
+        { method: "POST" },
+      )
+      const total = Object.values(purgeRes.counts).reduce((a, b) => a + b, 0)
+      toast.success(`پاکسازی انجام شد — ${total} رکورد حذف شد`)
+    } catch {
+      toast.error("خطا در پاکسازی داده‌ها")
+    } finally {
+      setPurging(false)
+    }
+  }
 
   const runSync = async (entities?: SyncEntity[]) => {
     const targetEntities = entities ?? Array.from(selectedEntities)
-    setSyncingEntities((prev) => {
-      const next = new Set(prev)
-      targetEntities.forEach((e) => next.add(e))
-      return next
-    })
-    setCancelling(false)
+    setStartingSync(true)
 
     try {
       const params = new URLSearchParams()
       params.set("maxPages", String(maxPages))
       params.set("pageSize", String(pageSize))
 
-      const res = await apiFetch<{ ok: boolean; results: SyncResult[] }>(
+      await apiFetch<{ ok: boolean; started: boolean }>(
         `/api/sync/run?${params}`,
         { method: "POST", body: JSON.stringify({ entities: targetEntities }) },
       )
 
-      if (res.ok) {
-        const names = targetEntities.map((e) => entityLabels[e]).join("، ")
-        toast.success(`سینک ${names} با موفقیت انجام شد`)
-        const freshLogs = await fetchLogs()
-        startTransition(() => setLogs(freshLogs))
-      }
+      const names = targetEntities.map((e) => entityLabels[e]).join("، ")
+      toast.success(`سینک ${names} شروع شد`)
+      await refresh()
     } catch (err) {
-      if (err instanceof Error && err.message.includes("لغو")) {
-        toast.info("سینک توسط شما لغو شد")
-      } else {
-        toast.error(err instanceof Error ? err.message : "خطا در اجرای سینک")
-      }
+      toast.error(err instanceof Error ? err.message : "خطا در شروع سینک")
     } finally {
-      setSyncingEntities((prev) => {
-        const next = new Set(prev)
-        targetEntities.forEach((e) => next.delete(e))
-        return next
-      })
-      setCancelling(false)
+      setStartingSync(false)
     }
   }
 
   const cancelSync = async () => {
     setCancelling(true)
     try {
-      await apiFetch("/api/sync/cancel", { method: "POST" })
-      toast.info("در حال لغو سینک...")
+      await apiFetch<{ ok: boolean; finalized: number }>("/api/sync/cancel", { method: "POST" })
+      toast.success("سینک متوقف شد")
+      await refresh()
     } catch {
-      toast.error("خطا در لغو سینک")
+      toast.error("خطا در توقف سینک")
+    } finally {
       setCancelling(false)
     }
+  }
+
+  const fetchErrorDetails = useCallback(async (logId: string, pageNum = 1) => {
+    setLoadingErrors((prev) => new Set(prev).add(logId))
+    try {
+      const data = await apiFetch<ErrorPage>(`/api/sync/logs/${logId}/errors?page=${pageNum}&limit=20`)
+      setErrorDetails((prev) => ({ ...prev, [logId]: data }))
+    } catch {
+      toast.error("خطا در دریافت جزئیات خطاها")
+    } finally {
+      setLoadingErrors((prev) => {
+        const next = new Set(prev)
+        next.delete(logId)
+        return next
+      })
+    }
+  }, [])
+
+  const viewErrorDetail = async (logId: string) => {
+    setShowErrors((prev) => {
+      const next = new Set(prev)
+      if (next.has(logId)) {
+        next.delete(logId)
+      } else {
+        next.add(logId)
+        if (!errorDetails[logId]) {
+          void fetchErrorDetails(logId)
+        }
+      }
+      return next
+    })
   }
 
   const toggleEntity = (entity: SyncEntity) => {
@@ -237,7 +284,6 @@ export default function SyncPage() {
   })
 
   const runningLogs = logs.filter((l) => l.status === "STARTED")
-  const hasRunning = runningLogs.length > 0
 
   return (
     <div className="flex flex-col gap-6">
@@ -248,19 +294,28 @@ export default function SyncPage() {
             هماهنگ‌سازی داده‌های کلینیک با سرور جردن
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={() => setShowConfig(!showConfig)}>
             <Settings2 className={showConfig ? "rotate-45" : ""} />
             تنظیمات
           </Button>
-          {isSyncing || hasRunning ? (
+          <Button
+            variant="outline"
+            onClick={purgeData}
+            disabled={purging || isSyncing}
+            className="text-rose-600 border-rose-200 hover:bg-rose-50"
+          >
+            <Database />
+            {purging ? "در حال پاکسازی..." : "پاکسازی داده‌های CRM"}
+          </Button>
+          {isSyncing ? (
             <Button variant="destructive" onClick={cancelSync} disabled={cancelling} size="lg">
               <Square />
-              {cancelling ? "در حال لغو..." : "توقف سینک"}
+              {cancelling ? "در حال توقف..." : "توقف سینک"}
             </Button>
           ) : (
-            <Button onClick={() => runSync()} disabled={isSyncing || selectedEntities.size === 0} size="lg">
-              <Play />
+            <Button onClick={() => runSync()} disabled={startingSync || selectedEntities.size === 0} size="lg">
+              {startingSync ? <Loader2 className="animate-spin" /> : <Play />}
               اجرای سینک
             </Button>
           )}
@@ -329,7 +384,7 @@ export default function SyncPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {Array.from(syncingEntities).map((entity) => {
+            {syncStatus.runningEntities.map((entity) => {
               const lastRunningLog = runningLogs.find((l) => l.entity === entity)
               const pages = lastRunningLog?.metadata?.pagesProcessed ?? 0
               const pct = maxPages > 0 ? Math.min(Math.round((pages / maxPages) * 100), 99) : 0
@@ -369,7 +424,7 @@ export default function SyncPage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {lastStatusPerEntity.map(({ entity, last }) => {
-          const syncing = syncingEntities.has(entity)
+          const syncing = runningEntities.has(entity)
           const runningLog = runningLogs.find((l) => l.entity === entity)
           return (
             <Card
@@ -542,62 +597,111 @@ export default function SyncPage() {
                   const StatusIcon = statusConfig[log.status].icon
                   const hasError = log.errorMessage || log.recordsFailed > 0
                   const isExpanded = showErrors.has(log.id)
+                  const errorsMeta = log.metadata?.errors
+                  const pageData = errorDetails[log.id]
                   return (
-                    <TableRow
-                      key={log.id}
-                      className={cn(hasError && "cursor-pointer")}
-                      onClick={() => hasError && toggleError(log.id)}
-                    >
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-2">
-                          <Database className={cn("size-4", entityColors[log.entity])} />
-                          {entityLabels[log.entity]}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={log.trigger === "MANUAL" ? "default" : "secondary"}>
-                          {log.trigger === "MANUAL" ? "دستی" : "خودکار"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={statusConfig[log.status].variant} className="gap-1">
-                          {log.status === "STARTED" ? (
-                            <Loader2 className="size-3 animate-spin" />
-                          ) : (
-                            <StatusIcon className="size-3" />
-                          )}
-                          {statusConfig[log.status].label}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {log.metadata?.pagesProcessed
-                          ? toPersianNum(log.metadata.pagesProcessed)
-                          : "--"}
-                      </TableCell>
-                      <TableCell>{toPersianNum(log.recordsRead)}</TableCell>
-                      <TableCell className="text-emerald-600 dark:text-emerald-400">
-                        {toPersianNum(log.recordsUpserted)}
-                      </TableCell>
-                      <TableCell>
-                        {log.recordsFailed > 0 ? (
-                          <span className="text-destructive font-medium flex items-center gap-1">
-                            {toPersianNum(log.recordsFailed)}
-                            {hasError && (isExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />)}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">--</span>
-                        )}
-                        {isExpanded && log.errorMessage && (
-                          <div className="mt-1 text-xs text-destructive whitespace-pre-wrap max-w-[200px]">
-                            {log.errorMessage}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                          <Clock className="size-3 shrink-0" />
-                          {formatDate(log.startedAt)}
-                        </div>
+                    <TableRow key={log.id} className="group">
+                      <TableCell colSpan={8} className="p-0">
+                        <Collapsible open={isExpanded}>
+                          <CollapsibleTrigger className="flex items-center p-4 w-full cursor-pointer" onClick={() => {
+                            if (!isExpanded && hasError && isSuperAdmin && errorsMeta?.length && !errorDetails[log.id]) {
+                              void fetchErrorDetails(log.id)
+                            }
+                            setShowErrors((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(log.id)) next.delete(log.id)
+                              else next.add(log.id)
+                              return next
+                            })
+                          }}>
+                            <div className="flex-1 grid grid-cols-[1.5fr_0.8fr_0.8fr_0.6fr_0.6fr_0.6fr_0.6fr_1.2fr] gap-2 items-center text-sm">
+                              <div className="font-medium flex items-center gap-2">
+                                <Database className={cn("size-4", entityColors[log.entity])} />
+                                {entityLabels[log.entity]}
+                              </div>
+                              <div>
+                                <Badge variant={log.trigger === "MANUAL" ? "default" : "secondary"}>
+                                  {log.trigger === "MANUAL" ? "دستی" : "خودکار"}
+                                </Badge>
+                              </div>
+                              <div>
+                                <Badge variant={statusConfig[log.status].variant} className="gap-1">
+                                  {log.status === "STARTED" ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : (
+                                    <StatusIcon className="size-3" />
+                                  )}
+                                  {statusConfig[log.status].label}
+                                </Badge>
+                              </div>
+                              <div className="text-muted-foreground text-xs">
+                                {log.metadata?.pagesProcessed ? toPersianNum(log.metadata.pagesProcessed) : "--"}
+                              </div>
+                              <div>{toPersianNum(log.recordsRead)}</div>
+                              <div className="text-emerald-600 dark:text-emerald-400">{toPersianNum(log.recordsUpserted)}</div>
+                              <div>
+                                {log.recordsFailed > 0 ? (
+                                  <span className="text-destructive font-medium flex items-center gap-1">
+                                    {toPersianNum(log.recordsFailed)}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">--</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <Clock className="size-3 shrink-0" />
+                                {formatDate(log.startedAt)}
+                                {hasError && (isExpanded ? <ChevronUp className="size-3 shrink-0" /> : <ChevronDown className="size-3 shrink-0" />)}
+                              </div>
+                            </div>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="border-t px-4 py-3 space-y-3 bg-muted/30">
+                              {log.errorMessage && (
+                                <div className="text-xs text-destructive whitespace-pre-wrap">{log.errorMessage}</div>
+                              )}
+                              {isSuperAdmin && errorsMeta && errorsMeta.length > 0 && (
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-2 text-xs font-medium">
+                                    <Bug className="size-3" />
+                                    جزئیات خطاها
+                                    {loadingErrors.has(log.id) && <Loader2 className="size-3 animate-spin" />}
+                                  </div>
+                                  {!pageData && !loadingErrors.has(log.id) && (
+                                    <Button variant="ghost" size="sm" className="text-xs h-6" onClick={() => void fetchErrorDetails(log.id)}>
+                                      نمایش جزئیات
+                                    </Button>
+                                  )}
+                                  {pageData && (
+                                    <div className="max-h-64 overflow-y-auto space-y-1">
+                                      {pageData.items.map((err, i) => (
+                                        <div key={i} className="text-xs bg-background rounded p-2 border">
+                                          <span className="text-muted-foreground font-medium">#{err.recordId}: </span>
+                                          <span className="text-destructive">{err.message}</span>
+                                        </div>
+                                      ))}
+                                      {pageData.totalPages > 1 && (
+                                        <div className="flex gap-1 pt-1">
+                                          {Array.from({ length: pageData.totalPages }, (_, i) => i + 1).map((p) => (
+                                            <Button
+                                              key={p}
+                                              variant={p === pageData.page ? "default" : "outline"}
+                                              size="sm"
+                                              className="text-[10px] h-5 w-5 p-0"
+                                              onClick={() => void fetchErrorDetails(log.id, p)}
+                                            >
+                                              {toPersianNum(p)}
+                                            </Button>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
                       </TableCell>
                     </TableRow>
                   )

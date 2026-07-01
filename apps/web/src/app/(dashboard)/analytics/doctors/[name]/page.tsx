@@ -23,12 +23,13 @@ import {
 import { formatDate } from "@/lib/date-utils"
 import Link from "next/link"
 
-interface Reserve {
+interface Reception {
   id: string
-  reserveDate: string
-  reserveTime: string
-  doctorName: string
-  isAccepted: boolean
+  receptionDate: string
+  receptionNo: number
+  treatmentItemNames: string | null
+  isReturn: boolean
+  userName: string
   patient: { externalCode: number; fullName: string | null } | null
 }
 
@@ -44,9 +45,9 @@ interface Treatment {
 
 interface DoctorDetail {
   doctorName: string
-  totalReserves: number
+  totalReceptions: number
   totalTreatments: number
-  reserves: Reserve[]
+  receptions: Reception[]
   treatments: Treatment[]
 }
 
@@ -132,7 +133,7 @@ export default function DoctorDetailPage() {
                 <CalendarClock className="size-6 text-white" />
               </div>
               <div>
-                <div className="text-2xl font-bold">{toPersianNum(data.totalReserves)}</div>
+                <div className="text-2xl font-bold">{toPersianNum(data.totalReceptions)}</div>
                 <div className="text-xs text-muted-foreground mt-0.5">کل نوبت‌ها</div>
               </div>
             </div>
@@ -188,14 +189,14 @@ export default function DoctorDetailPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-              <span className="text-sm">نسبت تبدیل نوبت به درمان</span>
-              <Badge variant={data.totalReserves > 0 && (data.totalTreatments / data.totalReserves) > 0.5 ? "default" : "secondary"}>
-                %{toPersianNum(data.totalReserves > 0 ? Math.round((data.totalTreatments / data.totalReserves) * 100) : 0)}
+              <span className="text-sm">نسبت تبدیل پذیرش به درمان</span>
+              <Badge variant={data.totalReceptions > 0 && (data.totalTreatments / data.totalReceptions) > 0.5 ? "default" : "secondary"}>
+                %{toPersianNum(data.totalReceptions > 0 ? Math.round((data.totalTreatments / data.totalReceptions) * 100) : 0)}
               </Badge>
             </div>
             <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-              <span className="text-sm">آخرین نوبت</span>
-              <span className="text-sm font-medium">{data.reserves[0] ? formatDate(data.reserves[0].reserveDate) : "---"}</span>
+              <span className="text-sm">آخرین پذیرش</span>
+              <span className="text-sm font-medium">{data.receptions[0] ? formatDate(data.receptions[0].receptionDate) : "---"}</span>
             </div>
             <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
               <span className="text-sm">آخرین طرح درمان</span>
@@ -210,34 +211,35 @@ export default function DoctorDetailPage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-base">
               <CalendarClock className="size-4" />
-              نوبت‌ها
+              پذیرش‌ها
             </CardTitle>
-            <Badge variant="outline">{toPersianNum(data.reserves.length)} مورد</Badge>
+            <Badge variant="outline">{toPersianNum(data.receptions.length)} مورد</Badge>
           </CardHeader>
           <CardContent className="p-0">
-            {data.reserves.length > 0 ? (
+            {data.receptions.length > 0 ? (
               <div className="divide-y max-h-[400px] overflow-y-auto">
-                {data.reserves.map((r) => (
+                {data.receptions.map((r) => (
                   <div key={r.id} className="p-4 flex items-center justify-between hover:bg-muted/30 transition-colors">
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">{r.reserveDate}</span>
-                        <span className="text-xs text-muted-foreground">ساعت {r.reserveTime}</span>
+                        <span className="text-sm font-medium">{r.receptionDate}</span>
+                        <span className="text-xs text-muted-foreground">شماره {toPersianNum(r.receptionNo)}</span>
                       </div>
+                      {r.treatmentItemNames && (
+                        <div className="text-xs text-muted-foreground">{r.treatmentItemNames}</div>
+                      )}
                       {r.patient && (
                         <div className="text-xs text-muted-foreground">
                           بیمار: {r.patient.fullName ?? `کد ${r.patient.externalCode}`}
                         </div>
                       )}
                     </div>
-                    <Badge variant={r.isAccepted ? "default" : "secondary"} className="shrink-0">
-                      {r.isAccepted ? "تأیید شده" : "در انتظار"}
-                    </Badge>
+                    {r.isReturn && <Badge variant="outline" className="shrink-0">عودت</Badge>}
                   </div>
                 ))}
               </div>
             ) : (
-              <CardContent className="p-8 text-center text-muted-foreground">نوبتی ثبت نشده است.</CardContent>
+              <CardContent className="p-8 text-center text-muted-foreground">پذيرشی ثبت نشده است.</CardContent>
             )}
           </CardContent>
         </Card>

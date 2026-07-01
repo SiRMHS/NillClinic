@@ -96,6 +96,7 @@ patientsRouter.get("/:id", async (req, res, next) => {
       include: {
         treatments: { orderBy: { planDate: "desc" }, take: 50 },
         reserves: { orderBy: { reserveDate: "desc" }, take: 50 },
+        receptions: { orderBy: { receptionDate: "desc" }, take: 50 },
       },
     });
 

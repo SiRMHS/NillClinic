@@ -36,9 +36,13 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  role         Role?             @relation(fields: [roleId], references: [id])
-  auditLogs    AuditLog[]
-  interactions LeadInteraction[]
+  role              Role?             @relation(fields: [roleId], references: [id])
+  auditLogs         AuditLog[]
+  interactions      LeadInteraction[]
+  assignedLeads     Lead[]            @relation("LeadAssignedUser")
+  leadCalls         LeadCall[]
+  leadFollowUps     LeadFollowUp[]
+  leadAppointments  LeadAppointment[]
 
   @@map("users")
 }
@@ -69,6 +73,7 @@ model Patient {
   treatments Treatment[]
   reserves   Reserve[]
   leads      Lead[]      @relation("LeadConvertedPatient")
+  receptions Reception[]
 
   @@index([fullName])
   @@index([mobile])
@@ -113,19 +118,20 @@ model Reserve {
 }
 
 model Treatment {
-  id               String   @id @default(cuid())
-  externalId       String   @unique @map("external_id") // treatmentPlanId
-  patientId        String?  @map("patient_id")
-  externalPatientCode Int   @map("external_patient_code")
-  planDate         String   @map("plan_date")
-  planName         String   @map("plan_name")
-  planUser         String   @map("plan_user")
-  reasonName       String?  @map("reason_name")
-  detailsJson      Json     @map("details_json")
-  isDeleted        Boolean  @default(false) @map("is_deleted")
-  syncedAt         DateTime @map("synced_at")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                  String   @id @default(cuid())
+  externalId          String   @unique @map("external_id") // treatmentPlanId
+  patientId           String?  @map("patient_id")
+  externalPatientCode Int      @map("external_patient_code")
+  planDate            String   @map("plan_date")
+  planName            String   @map("plan_name")
+  planUser            String   @map("plan_user")
+  reasonName          String?  @map("reason_name")
+  reasonNames         Json     @default("[]") @map("reason_names")
+  detailsJson         Json     @map("details_json")
+  isDeleted           Boolean  @default(false) @map("is_deleted")
+  syncedAt            DateTime @map("synced_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   patient Patient? @relation(fields: [patientId], references: [id])
 
@@ -133,6 +139,31 @@ model Treatment {
   @@index([planUser])
   @@index([planDate])
   @@map("treatments")
+}
+
+model Reception {
+  id                  String   @id @default(cuid())
+  externalId          Int      @unique @map("external_id")
+  receptionNo         Int      @map("reception_no")
+  patientExternalCode Int?     @map("patient_external_code")
+  patientId           String?  @map("patient_id")
+  receptionDate       String   @map("reception_date")
+  isReturn            Boolean  @default(false) @map("is_return")
+  description         String?  @map("description")
+  treatmentItemNames  String?  @map("treatment_item_names")
+  treatmentItemNamesList Json  @default("[]") @map("treatment_item_names_list")
+  userName            String   @map("user_name")
+  detailsJson         Json     @default("[]") @map("details_json")
+  syncedAt            DateTime @map("synced_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  patient Patient? @relation(fields: [patientId], references: [id])
+
+  @@index([receptionDate])
+  @@index([patientExternalCode])
+  @@index([userName])
+  @@map("receptions")
 }
 
 // ─── Lead System (Layer 4) ───
@@ -151,27 +182,115 @@ enum LeadStatus {
   LOST
 }
 
+enum CallStatus {
+  ANSWERED
+  NO_ANSWER
+  BUSY
+  VOICEMAIL
+  WRONG_NUMBER
+}
+
+enum CallOutcome {
+  SERVICE_ACCEPTED
+  SERVICE_DECLINED
+  CALLBACK_REQUESTED
+  NO_INTEREST
+}
+
+enum FollowUpStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
 model Lead {
-  id              String     @id @default(cuid())
-  source          LeadSource
-  status          LeadStatus @default(NEW)
-  fullNameEnc     String?    @map("full_name_enc")
-  mobileEnc       String?    @map("mobile_enc")
-  metadata        Json       @default("{}")
-  externalRef     String?    @map("external_ref") // Manychat / n8n id
-  convertedPatientId String? @map("converted_patient_id")
-  contactedAt     DateTime?  @map("contacted_at")
-  convertedAt     DateTime?  @map("converted_at")
-  createdAt       DateTime   @default(now()) @map("created_at")
-  updatedAt       DateTime   @updatedAt @map("updated_at")
+  id                 String        @id @default(cuid())
+  source             LeadSource
+  status             LeadStatus    @default(NEW)
+  fullNameEnc        String?       @map("full_name_enc")
+  mobileEnc          String?       @map("mobile_enc")
+  metadata           Json          @default("{}")
+  externalRef        String?       @map("external_ref") // Manychat / n8n id
+  convertedPatientId String?       @map("converted_patient_id")
+  assignedUserId     String?       @map("assigned_user_id")
+  contactedAt        DateTime?     @map("contacted_at")
+  convertedAt        DateTime?     @map("converted_at")
+  nextFollowUpAt     DateTime?     @map("next_follow_up_at")
+  lastCallStatus     CallStatus?   @map("last_call_status")
+  lastCallOutcome    CallOutcome?  @map("last_call_outcome")
+  serviceReceived    Boolean?      @map("service_received")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
 
   convertedPatient Patient? @relation("LeadConvertedPatient", fields: [convertedPatientId], references: [id])
+  assignedUser     User?    @relation("LeadAssignedUser", fields: [assignedUserId], references: [id])
 
-  interactions LeadInteraction[]
+  interactions  LeadInteraction[]
+  calls         LeadCall[]
+  followUps     LeadFollowUp[]
+  appointments  LeadAppointment[]
 
   @@index([source, status])
+  @@index([assignedUserId])
+  @@index([nextFollowUpAt])
   @@index([createdAt])
   @@map("leads")
+}
+
+model LeadCall {
+  id              String       @id @default(cuid())
+  leadId          String       @map("lead_id")
+  userId          String?      @map("user_id")
+  callStatus      CallStatus   @map("call_status")
+  callOutcome     CallOutcome? @map("call_outcome")
+  serviceReceived Boolean?     @map("service_received")
+  notes           String?
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  lead Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@map("lead_calls")
+}
+
+model LeadFollowUp {
+  id            String         @id @default(cuid())
+  leadId        String         @map("lead_id")
+  userId        String?        @map("user_id")
+  scheduledAt   DateTime       @map("scheduled_at")
+  status        FollowUpStatus @default(PENDING)
+  reason        String?
+  notes         String?
+  attemptNumber Int            @default(1) @map("attempt_number")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  completedAt   DateTime?      @map("completed_at")
+
+  lead Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([leadId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@map("lead_follow_ups")
+}
+
+model LeadAppointment {
+  id          String   @id @default(cuid())
+  leadId      String   @map("lead_id")
+  userId      String?  @map("user_id")
+  reserveDate String   @map("reserve_date")
+  reserveTime String   @map("reserve_time")
+  doctorName  String   @map("doctor_name")
+  serviceName String?  @map("service_name")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  lead Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@index([reserveDate])
+  @@map("lead_appointments")
 }
 
 model LeadInteraction {
@@ -196,6 +315,7 @@ enum SyncEntity {
   SERVICES
   RESERVES
   TREATMENTS
+  RECEPTIONS
 }
 
 enum SyncStatus {

@@ -1,5 +1,18 @@
 import { prisma } from "@jordan/db";
+import { normalizeCrmText, splitCrmLabels } from "@jordan/shared";
 import type { TimeRange } from "@jordan/shared";
+
+function treatmentReasons(reasonName: string | null, reasonNames: unknown): string[] {
+  if (Array.isArray(reasonNames) && reasonNames.length > 0) {
+    return reasonNames.map((r) => normalizeCrmText(String(r))).filter(Boolean);
+  }
+  return splitCrmLabels(reasonName);
+}
+
+function treatmentItemLabel(detail: { treatmentPlanDetailName?: string | null; treatmentItems?: string | null }): string {
+  const name = normalizeCrmText(detail.treatmentPlanDetailName) || normalizeCrmText(detail.treatmentItems);
+  return name || "بدون نام";
+}
 
 export class AnalyticsService {
   private rangeToDate(range: TimeRange): Date | null {
@@ -80,21 +93,24 @@ export class AnalyticsService {
     try {
       const treatments = await prisma.treatment.findMany({
         where: { isDeleted: false, reasonName: { not: null } },
-        select: { reasonName: true, detailsJson: true },
+        select: { reasonName: true, reasonNames: true, detailsJson: true },
       });
 
       const diagTreatMap = new Map<string, Map<string, number>>();
 
       for (const t of treatments) {
-        const diag = t.reasonName!;
-        if (!diagTreatMap.has(diag)) diagTreatMap.set(diag, new Map());
-        const treatMap = diagTreatMap.get(diag)!;
-
+        const diagnoses = treatmentReasons(t.reasonName, t.reasonNames);
         const details = t.detailsJson as Array<{ treatmentPlanDetailName?: string | null; treatmentItems?: string | null }> | null;
-        if (Array.isArray(details)) {
-          for (const d of details) {
-            const item = d.treatmentPlanDetailName || d.treatmentItems || "بدون نام";
-            treatMap.set(item, (treatMap.get(item) ?? 0) + 1);
+
+        for (const diag of diagnoses) {
+          if (!diagTreatMap.has(diag)) diagTreatMap.set(diag, new Map());
+          const treatMap = diagTreatMap.get(diag)!;
+
+          if (Array.isArray(details)) {
+            for (const d of details) {
+              const item = treatmentItemLabel(d);
+              treatMap.set(item, (treatMap.get(item) ?? 0) + 1);
+            }
           }
         }
       }
@@ -159,13 +175,15 @@ export class AnalyticsService {
     try {
       const treatments = await prisma.treatment.findMany({
         where: { isDeleted: false },
-        select: { reasonName: true },
+        select: { reasonName: true, reasonNames: true },
       });
 
       const counts = new Map<string, number>();
       for (const t of treatments) {
-        const name = t.reasonName ?? "نامشخص";
-        counts.set(name, (counts.get(name) ?? 0) + 1);
+        const reasons = treatmentReasons(t.reasonName, t.reasonNames);
+        for (const name of reasons.length ? reasons : ["نامشخص"]) {
+          counts.set(name, (counts.get(name) ?? 0) + 1);
+        }
       }
 
       return Array.from(counts.entries())
@@ -181,7 +199,7 @@ export class AnalyticsService {
     try {
       const treatments = await prisma.treatment.findMany({
         where: { isDeleted: false },
-        select: { planName: true, reasonName: true, detailsJson: true, planDate: true, planUser: true },
+        select: { planName: true, reasonName: true, reasonNames: true, detailsJson: true, planDate: true, planUser: true },
       });
 
       const categoryCount = new Map<string, number>();
@@ -191,11 +209,13 @@ export class AnalyticsService {
       const doctorCategory = new Map<string, Record<string, number>>();
 
       for (const t of treatments) {
-        const cat = t.planName || "نامشخص";
+        const cat = normalizeCrmText(t.planName) || "نامشخص";
         categoryCount.set(cat, (categoryCount.get(cat) ?? 0) + 1);
 
-        const reason = t.reasonName || "نامشخص";
-        reasonCount.set(reason, (reasonCount.get(reason) ?? 0) + 1);
+        const reasons = treatmentReasons(t.reasonName, t.reasonNames);
+        for (const reason of reasons.length ? reasons : ["نامشخص"]) {
+          reasonCount.set(reason, (reasonCount.get(reason) ?? 0) + 1);
+        }
 
         const month = t.planDate?.slice(0, 7) || "نامشخص";
         if (!monthlyTrend.has(month)) monthlyTrend.set(month, {});
@@ -203,15 +223,16 @@ export class AnalyticsService {
         monthData[cat] = (monthData[cat] ?? 0) + 1;
 
         if (t.planUser) {
-          if (!doctorCategory.has(t.planUser)) doctorCategory.set(t.planUser, {});
-          const dc = doctorCategory.get(t.planUser)!;
+          const doctor = normalizeCrmText(t.planUser);
+          if (!doctorCategory.has(doctor)) doctorCategory.set(doctor, {});
+          const dc = doctorCategory.get(doctor)!;
           dc[cat] = (dc[cat] ?? 0) + 1;
         }
 
         const details = t.detailsJson as Array<{ treatmentPlanDetailName?: string | null; treatmentItems?: string | null }> | null;
         if (Array.isArray(details)) {
           for (const d of details) {
-            const itemName = d.treatmentPlanDetailName || d.treatmentItems || "بدون نام";
+            const itemName = treatmentItemLabel(d);
             itemCount.set(itemName, (itemCount.get(itemName) ?? 0) + 1);
           }
         }

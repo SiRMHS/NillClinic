@@ -3,6 +3,9 @@ export { prisma } from "./client.js";
 import pkg from "@prisma/client";
 import type {
   AuditAction as AuditActionType,
+  CallOutcome as CallOutcomeType,
+  CallStatus as CallStatusType,
+  FollowUpStatus as FollowUpStatusType,
   LeadSource as LeadSourceType,
   LeadStatus as LeadStatusType,
   Prisma,
@@ -24,6 +27,15 @@ export type LeadSource = LeadSourceType;
 
 export const LeadStatus = pkg.LeadStatus;
 export type LeadStatus = LeadStatusType;
+
+export const CallStatus = pkg.CallStatus;
+export type CallStatus = CallStatusType;
+
+export const CallOutcome = pkg.CallOutcome;
+export type CallOutcome = CallOutcomeType;
+
+export const FollowUpStatus = pkg.FollowUpStatus;
+export type FollowUpStatus = FollowUpStatusType;
 
 export const SyncEntity = pkg.SyncEntity;
 export type SyncEntity = SyncEntityType;

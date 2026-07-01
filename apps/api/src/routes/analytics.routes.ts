@@ -121,10 +121,10 @@ analyticsRouter.get("/doctor-detail/:name", async (req, res, next) => {
   try {
     const name = decodeURIComponent(req.params.name);
 
-    const [reserves, treatments] = await Promise.all([
-      prisma.reserve.findMany({
-        where: { doctorName: name },
-        orderBy: [{ reserveDate: "desc" }, { reserveTime: "desc" }],
+    const [receptions, treatments] = await Promise.all([
+      prisma.reception.findMany({
+        where: { userName: name },
+        orderBy: { receptionDate: "desc" },
         take: 100,
         include: { patient: { select: { externalCode: true, fullNameEnc: true } } },
       }),
@@ -138,7 +138,7 @@ analyticsRouter.get("/doctor-detail/:name", async (req, res, next) => {
 
     const decrypt = (await import("../security/encryption.js")).decrypt;
 
-    const reservesWithPatient = reserves.map((r) => {
+    const receptionsWithPatient = receptions.map((r) => {
       let fullName: string | null = null;
       try { fullName = r.patient?.fullNameEnc ? decrypt(r.patient.fullNameEnc) : null; } catch {}
       return { ...r, patient: r.patient ? { externalCode: r.patient.externalCode, fullName } : null };
@@ -150,14 +150,14 @@ analyticsRouter.get("/doctor-detail/:name", async (req, res, next) => {
       return { ...t, patient: t.patient ? { externalCode: t.patient.externalCode, fullName } : null };
     });
 
-    const totalReserves = await prisma.reserve.count({ where: { doctorName: name } });
+    const totalReceptions = await prisma.reception.count({ where: { userName: name } });
     const totalTreatments = await prisma.treatment.count({ where: { planUser: name, isDeleted: false } });
 
     res.json({
       doctorName: name,
-      totalReserves,
+      totalReceptions,
       totalTreatments,
-      reserves: reservesWithPatient,
+      receptions: receptionsWithPatient,
       treatments: treatmentsWithPatient,
     });
   } catch (e) {

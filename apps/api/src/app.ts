@@ -5,6 +5,7 @@ import { analyticsRouter } from "./routes/analytics.routes.js";
 import { healthRouter } from "./routes/health.routes.js";
 import { leadsRouter, leadsWebhookRouter } from "./routes/leads.routes.js";
 import { patientsRouter } from "./routes/patients.routes.js";
+import { receptionsRouter } from "./routes/receptions.routes.js";
 import { syncRouter } from "./routes/sync.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { adminRouter } from "./routes/admin.routes.js";
@@ -31,6 +32,7 @@ app.use("/api/leads/webhook", webhookRateLimit, leadsWebhookRouter);
 app.use("/api/leads", requireAuth, leadsRouter);
 app.use("/api/patients", requireAuth, patientsRouter);
 app.use("/api/sync", requireAuth, syncRouter);
+app.use("/api/receptions", requireAuth, receptionsRouter);
 app.use("/api/admin", requireAuth, adminRouter);
 app.use("/api/webhook-logs", requireAuth, webhookLogsRouter);
 

@@ -10,6 +10,13 @@ export interface PaginationParams {
   pageSize?: number;
 }
 
+export interface ReceptionQueryParams extends PaginationParams {
+  /** Jalali date YYYY/MM/DD */
+  fromDate?: string;
+  /** Jalali date YYYY/MM/DD */
+  toDate?: string;
+}
+
 export class JordanApiClient {
   private token: string | null = null;
 
@@ -87,6 +94,16 @@ export class JordanApiClient {
   getTreatments(pagination?: PaginationParams) {
     const params = pagination ? this.toParams(pagination) : "";
     return this.get<unknown[]>(`/api/Treatment/GetTreatments${params}`);
+  }
+
+  getReceptions(query?: ReceptionQueryParams) {
+    const params = new URLSearchParams();
+    if (query?.fromDate) params.set("fromdate", query.fromDate);
+    if (query?.toDate) params.set("todate", query.toDate);
+    if (query?.page) params.set("pageNumber", String(query.page));
+    if (query?.pageSize) params.set("pageSize", String(query.pageSize));
+    const qs = params.toString();
+    return this.get<unknown[]>(`/api/Reception/GetReceptions${qs ? `?${qs}` : ""}`);
   }
 
   private toParams(p: PaginationParams): string {

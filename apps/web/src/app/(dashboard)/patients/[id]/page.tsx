@@ -22,6 +22,7 @@ import {
   TrendingUp,
   Activity,
   Tag,
+  ClipboardList,
 } from "lucide-react"
 import { formatDate, formatDateTime, calculateAge } from "@/lib/date-utils"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
@@ -44,6 +45,7 @@ interface PatientDetail {
   syncedAt: string
   treatments: Treatment[]
   reserves: Reserve[]
+  receptions: Reception[]
 }
 
 interface Treatment {
@@ -65,6 +67,18 @@ interface Reserve {
   doctorName: string
   isAccepted: boolean
   syncedAt: string
+}
+
+interface Reception {
+  id: string
+  externalId: number
+  receptionNo: number
+  receptionDate: string
+  treatmentItemNames: string | null
+  treatmentItemNamesList: unknown
+  userName: string
+  isReturn: boolean
+  detailsJson: unknown
 }
 
 const genderLabels: Record<number, string> = {
@@ -121,6 +135,7 @@ export default function PatientDetailPage() {
 
   const hasTreatments = patient.treatments.length > 0
   const hasReserves = patient.reserves.length > 0
+  const hasReceptions = patient.receptions.length > 0
 
   return (
     <div className="flex flex-col gap-6">
@@ -146,10 +161,15 @@ export default function PatientDetailPage() {
           </TabsTrigger>
           <TabsTrigger value="reserves" disabled={!hasReserves}>
             <Clock className="size-4" />
-            نوبت‌ها
+            نوبت‌ها (رزرو)
             {hasReserves && <Badge variant="default" className="mr-1 size-5 p-0 text-[10px]">{patient.reserves.length}</Badge>}
           </TabsTrigger>
-          <TabsTrigger value="analysis" disabled={!hasTreatments && !hasReserves}>
+          <TabsTrigger value="receptions" disabled={!hasReceptions}>
+            <ClipboardList className="size-4" />
+            نوبت‌ها (پذیرش)
+            {hasReceptions && <Badge variant="default" className="mr-1 size-5 p-0 text-[10px]">{patient.receptions.length}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="analysis" disabled={!hasTreatments && !hasReserves && !hasReceptions}>
             <BarChart3 className="size-4" />
             تحلیل بیمار
           </TabsTrigger>
@@ -320,7 +340,7 @@ export default function PatientDetailPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <Clock />
-                نوبت‌ها
+                نوبت‌ها (رزرو)
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
@@ -343,6 +363,42 @@ export default function PatientDetailPage() {
               ) : (
                 <CardContent className="p-8 text-center text-muted-foreground">
                   نوبتی برای این بیمار ثبت نشده است.
+                </CardContent>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="receptions">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <ClipboardList />
+                نوبت‌ها (پذیرش)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {hasReceptions ? (
+                <div className="divide-y">
+                  {patient.receptions.map((r) => (
+                    <div key={r.id} className="p-5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-medium">
+                          {r.treatmentItemNames || "پذیرش"}
+                          {r.isReturn && <Badge variant="outline" className="mr-2">عودت</Badge>}
+                        </div>
+                        <span className="text-xs text-muted-foreground">{r.receptionDate}</span>
+                      </div>
+                      <div className="flex gap-3 text-xs text-muted-foreground">
+                        <span>پذیرنده: {r.userName}</span>
+                        <span>شماره: {toPersianNum(r.receptionNo)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <CardContent className="p-8 text-center text-muted-foreground">
+                  پذیرشی برای این بیمار ثبت نشده است.
                 </CardContent>
               )}
             </CardContent>

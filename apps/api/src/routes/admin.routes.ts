@@ -2,8 +2,10 @@ import { Router } from "express";
 import { prisma } from "@jordan/db";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { createEncryptFn, decrypt } from "../security/encryption.js";
 
 export const adminRouter = Router();
+const encrypt = createEncryptFn();
 
 const createUserSchema = z.object({
   email: z.string().email(),
@@ -251,40 +253,6 @@ adminRouter.delete("/roles/:id", async (req, res, next) => {
   }
 });
 
-// ─── Teams (roles with members) ───
-
-adminRouter.get("/teams", async (req, res, next) => {
-  try {
-    const roles = await prisma.role.findMany({
-      include: {
-        users: {
-          select: {
-            id: true,
-            email: true,
-            fullName: true,
-            isActive: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-    });
-
-    const teams = roles.map((r) => ({
-      id: r.id,
-      name: r.name,
-      label: r.label,
-      description: r.description,
-      permissions: r.permissions,
-      members: r.users,
-      memberCount: r.users.length,
-    }));
-
-    res.json(teams);
-  } catch (e) {
-    next(e);
-  }
-});
-
 // ─── Permissions list ───
 
 export const AVAILABLE_PERMISSIONS = [
@@ -293,15 +261,89 @@ export const AVAILABLE_PERMISSIONS = [
   { key: "patients.view", label: "بیماران (مشاهده)", group: "بیماران" },
   { key: "leads", label: "لیدها", group: "فروش" },
   { key: "analytics", label: "تحلیل‌ها", group: "گزارشات" },
-  { key: "sync", label: "سینک CRM", group: "سیستم" },
   { key: "settings", label: "تنظیمات", group: "سیستم" },
   { key: "settings.users", label: "مدیریت کاربران", group: "سیستم" },
   { key: "settings.roles", label: "مدیریت نقش‌ها", group: "سیستم" },
   { key: "settings.webhook-logs", label: "لاگ وب‌هوک", group: "سیستم" },
   { key: "settings.external-migration", label: "ورودی خارجی", group: "سیستم" },
   { key: "settings.leads-log", label: "لاگ ورودی‌ها", group: "سیستم" },
+  { key: "settings.leads-bank", label: "بانک لیدها", group: "سیستم" },
 ] as const;
 
 adminRouter.get("/permissions", (_req, res) => {
   res.json(AVAILABLE_PERMISSIONS);
+});
+
+adminRouter.get("/leads-bank", async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const limit = Math.min(Math.max(1, Number(req.query.limit ?? 50)), 200);
+    const skip = (page - 1) * limit;
+    const search = (req.query.search as string)?.trim();
+
+    const where: Record<string, unknown> = {};
+    if (search) {
+      where.OR = [
+        { externalRef: { contains: search } },
+        { source: search.toUpperCase() as never },
+      ].filter(Boolean);
+    }
+
+    const select = {
+      id: true,
+      source: true,
+      status: true,
+      fullNameEnc: true,
+      mobileEnc: true,
+      externalRef: true,
+      createdAt: true,
+      assignedUser: { select: { id: true, fullName: true } },
+    } as const;
+
+    const allLeads = await prisma.lead.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      select,
+    });
+
+    // Deduplicate by phone: keep the newest entry per phone, merge sources
+    const byPhone = new Map<string, typeof allLeads[0] & { sources: string[] }>();
+    for (const l of allLeads) {
+      let mobile: string | null = null;
+      try { mobile = l.mobileEnc ? decrypt(l.mobileEnc) : null; } catch {}
+      const key = mobile ? mobile.replace(/\D/g, "").slice(-10) : l.id;
+      const existing = byPhone.get(key);
+      if (existing) {
+        const sources = new Set([...existing.sources, l.source]);
+        if (new Date(l.createdAt) > new Date(existing.createdAt)) {
+          byPhone.set(key, { ...l, sources: [...sources] });
+        } else {
+          existing.sources = [...sources];
+        }
+      } else {
+        byPhone.set(key, { ...l, sources: [l.source] });
+      }
+    }
+
+    const deduped = Array.from(byPhone.values())
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const total = deduped.length;
+    const pageLeads = deduped.slice(skip, skip + limit);
+
+    const decrypted = pageLeads.map((l) => {
+      let fullName: string | null = null;
+      let mobile: string | null = null;
+      try { fullName = l.fullNameEnc ? decrypt(l.fullNameEnc) : null; } catch {}
+      try { mobile = l.mobileEnc ? decrypt(l.mobileEnc) : null; } catch {}
+      return { ...l, fullNameEnc: undefined, mobileEnc: undefined, fullName, mobile, sources: l.sources };
+    });
+
+    res.json({
+      data: decrypted,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (e) {
+    next(e);
+  }
 });

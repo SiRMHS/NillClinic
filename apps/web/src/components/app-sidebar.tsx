@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { NavUser } from "@/components/nav-user"
-import { TeamSwitcher } from "@/components/team-switcher"
+import { ClinicBrand } from "@/components/clinic-brand"
 import {
   Sidebar,
   SidebarContent,
@@ -21,7 +21,7 @@ import Link from "next/link"
 import {
   Sun, Moon, LayoutDashboardIcon, UsersIcon, BarChart3Icon,
   RefreshCwIcon, StethoscopeIcon, DatabaseIcon,
-  ClipboardListIcon, WebhookIcon, UserCogIcon, Building2Icon,BrainCircuit,
+  ClipboardListIcon, WebhookIcon, UserCogIcon,
   Activity,
 } from "lucide-react"
 
@@ -48,10 +48,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     ...(hasPermission("settings") ? [
       { title: "ورودی خارجی", url: "/settings/external-migration", icon: DatabaseIcon },
       { title: "لاگ ورودی‌ها", url: "/settings/leads-log", icon: ClipboardListIcon },
+      { title: "بانک لیدها", url: "/settings/leads-bank", icon: DatabaseIcon },
       { title: "لاگ وب‌هوک", url: "/settings/webhook-logs", icon: WebhookIcon },
     ] : []),
-    ...(hasPermission("settings.users") ? [{ title: "کاربران", url: "/settings/users", icon: UserCogIcon }] : []),
-    ...(hasPermission("settings.roles") ? [{ title: "تیم‌ها", url: "/settings/teams", icon: Building2Icon }] : []),
+    ...(hasPermission("settings.users") || hasPermission("settings.roles")
+      ? [{ title: "کاربران و نقش‌ها", url: "/settings/users", icon: UserCogIcon }]
+      : []),
   ]
 
   const isActive = (url: string) => pathname === url || pathname.startsWith(url + "/")
@@ -61,13 +63,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <TeamSwitcher teams={[
-          {
-            name: "کلینیک جردن",
-            logo: <BrainCircuit className="text-yellow-600 dark:text-yellow-400" />,
-            plan: "داشبورد مدیریتی",
-          },
-        ]} />
+        <ClinicBrand />
       </SidebarHeader>
       <SidebarContent>
         {navItems.length > 0 && (

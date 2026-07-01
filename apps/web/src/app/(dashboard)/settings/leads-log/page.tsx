@@ -8,13 +8,15 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table"
-import {
   MessageSquare, PhoneCall, FileText, StickyNote, SearchIcon,
-  ChevronRight, ChevronLeft, Filter,
+  UserPlus, UserMinus, Filter,
 } from "lucide-react"
 import { formatDateTime } from "@/lib/date-utils"
+
+interface UserRef {
+  id: string
+  fullName: string | null
+}
 
 interface Interaction {
   id: string
@@ -22,13 +24,7 @@ interface Interaction {
   type: string
   content: string
   createdAt: string
-}
-
-interface LeadInfo {
-  id: string
-  fullName: string | null
-  source: string
-  status: string
+  user?: UserRef | null
 }
 
 interface LeadWithInteractions {
@@ -47,6 +43,8 @@ const typeIcons: Record<string, React.ReactNode> = {
   CALL: <PhoneCall className="size-3.5" />,
   REPORT: <FileText className="size-3.5" />,
   MESSAGE: <MessageSquare className="size-3.5" />,
+  ASSIGN: <UserPlus className="size-3.5" />,
+  UNASSIGN: <UserMinus className="size-3.5" />,
 }
 
 const typeColors: Record<string, string> = {
@@ -54,6 +52,8 @@ const typeColors: Record<string, string> = {
   CALL: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
   REPORT: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
   MESSAGE: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+  ASSIGN: "bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300",
+  UNASSIGN: "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
 }
 
 const typeLabels: Record<string, string> = {
@@ -61,6 +61,8 @@ const typeLabels: Record<string, string> = {
   CALL: "تماس تلفنی",
   REPORT: "گزارش",
   MESSAGE: "پیام",
+  ASSIGN: "تخصیص",
+  UNASSIGN: "برداشتن تخصیص",
 }
 
 function toPersianNum(num: number | string) {
@@ -81,7 +83,12 @@ export default function LeadsLogPage() {
   }, [])
 
   const allInteractions = leads.flatMap((l) =>
-    l.interactions.map((i) => ({ ...i, leadName: l.fullName, leadSource: l.source, leadStatus: l.status }))
+    l.interactions.map((i) => ({
+      ...i,
+      leadName: l.fullName,
+      leadSource: l.source,
+      leadStatus: l.status,
+    }))
   ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
   const filtered = allInteractions.filter((i) => {
@@ -96,12 +103,14 @@ export default function LeadsLogPage() {
     byType[i.type] = (byType[i.type] ?? 0) + 1
   }
 
+  const allTypes = ["NOTE", "CALL", "REPORT", "MESSAGE", "ASSIGN", "UNASSIGN"]
+
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">لاگ ورودی‌ها</h1>
+        <h1 className="text-2xl font-bold tracking-tight">لاگ فعالیت‌ها و تخصیص لیدها</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          ثبت فعالیت‌های انجام شده روی مخاطبان (تماس، پیام، گزارش، یادداشت)
+          تاریخچه کامل فعالیت‌ها، تماس‌ها و تخصیص لیدها
         </p>
       </div>
 
@@ -112,7 +121,7 @@ export default function LeadsLogPage() {
             <div className="text-xs text-muted-foreground">کل فعالیت‌ها</div>
           </CardContent>
         </Card>
-        {Object.entries(byType).map(([type, count]) => (
+        {Object.entries(byType).slice(0, 3).map(([type, count]) => (
           <Card key={type}>
             <CardContent className="p-4 text-center">
               <div className="text-2xl font-bold">{toPersianNum(count)}</div>
@@ -132,8 +141,8 @@ export default function LeadsLogPage() {
             className="pr-9"
           />
         </div>
-        <div className="flex gap-1">
-          {[null, "NOTE", "CALL", "REPORT", "MESSAGE"].map((t) => (
+        <div className="flex gap-1 flex-wrap">
+          {[null, ...allTypes].map((t) => (
             <Button
               key={t ?? "all"}
               variant={typeFilter === t ? "default" : "outline"}
@@ -177,8 +186,14 @@ export default function LeadsLogPage() {
                       <Badge variant="outline" className="text-[10px]">{item.leadSource}</Badge>
                     </div>
                     <div className="text-sm text-muted-foreground mt-1 line-clamp-2">{item.content}</div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {formatDateTime(item.createdAt)}
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
+                      <span>{formatDateTime(item.createdAt)}</span>
+                      {item.user && (
+                        <span className="flex items-center gap-1">
+                          <span className="text-muted-foreground">توسط</span>
+                          <span className="font-medium text-foreground">{item.user.fullName || "نامشخص"}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
