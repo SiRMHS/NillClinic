@@ -91,12 +91,17 @@ export default function PatientDetailPage() {
   const router = useRouter()
   const [patient, setPatient] = useState<PatientDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState("info")
 
   useEffect(() => {
+    setError(null)
     apiFetch<PatientDetail>(`/api/patients/${id}`)
       .then(setPatient)
-      .catch(() => {})
+      .catch((e: Error) => {
+        setPatient(null)
+        setError(e.message || "خطا در بارگذاری اطلاعات بیمار")
+      })
       .finally(() => setLoading(false))
   }, [id])
 
@@ -113,7 +118,7 @@ export default function PatientDetailPage() {
   if (!patient) {
     return (
       <div className="flex flex-col items-center gap-4 py-20">
-        <p className="text-muted-foreground">بیمار یافت نشد</p>
+        <p className="text-muted-foreground">{error ?? "بیمار یافت نشد"}</p>
         <Button variant="outline" onClick={() => router.back()}>بازگشت به لیست بیماران</Button>
       </div>
     )
