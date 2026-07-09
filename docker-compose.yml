@@ -4,7 +4,7 @@
 # On the server:
 #   1. Copy deploy/.env.production.example → .env and fill values
 #   2. docker login ghcr.io -u YOUR_GITHUB_USER -p YOUR_GITHUB_TOKEN
-#   3. docker compose pull && docker compose up -d
+#   3. docker compose pull && docker compose up -d 
 # ─────────────────────────────────────────────────────────
 version: "3.9"
 
