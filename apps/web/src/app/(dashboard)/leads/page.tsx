@@ -24,6 +24,7 @@ import {
 } from "lucide-react"
 import { CallFlowDialog, type CallFlowData } from "@/components/leads/call-flow-dialog"
 import { ReceptionsPanel } from "@/components/leads/receptions-panel"
+import { LeadMetadataPanel, hasVisibleMetadata } from "@/components/leads/lead-metadata-panel"
 import {
   type Agent, type Lead,
   sourceIcons, sourceColors, sourceLabels,
@@ -561,6 +562,10 @@ function LeadCard({
                 </Button>
               </Link>
             </div>
+          )}
+
+          {hasVisibleMetadata(lead.metadata) && (
+            <LeadMetadataPanel metadata={lead.metadata} />
           )}
 
           {/* Call status summary */}

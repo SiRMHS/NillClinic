@@ -42,11 +42,14 @@ export default function ExternalMigrationPage() {
   -H "Content-Type: application/json" \\
   -H "x-webhook-secret: WEBHOOK_SECRET" \\
   -d '{
-    "source": "site",
-    "name": "نام مخاطب",
-    "phone": "09123456789",
-    "external_id": "ref-123",
-    "payload": {}
+    "source": "instagram_manychat",
+    "name": "حسینی",
+    "phone": "09124712948",
+    "external_id": "877781495",
+    "payload": {
+      "service": "اندولیفت",
+      "ig_username": "massod.hoseini"
+    }
   }'`
 
   useEffect(() => {
@@ -117,7 +120,9 @@ export default function ExternalMigrationPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="text-sm text-muted-foreground">
-              از سایت، ربات اینستاگرام یا واتساپ خود یک درخواست <b>POST</b> به آدرس بالا بفرستید:
+              از سایت، ربات اینستاگرام یا واتساپ خود یک درخواست <b>POST</b> به آدرس بالا بفرستید.
+              فیلد <code className="bg-muted px-1 rounded text-xs">payload</code> می‌تواند هر کلید-مقدار دلخواهی داشته باشد
+              (مثلاً <code className="bg-muted px-1 rounded text-xs">service</code> به‌صورت رشته یا آرایه).
             </div>
             <div className="relative rounded-lg border bg-muted/30 p-3">
               <Button

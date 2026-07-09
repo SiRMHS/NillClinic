@@ -37,15 +37,32 @@ Base: `http://localhost:4000`
 
 ```json
 {
-  "source": "instagram",
-  "name": "نام",
-  "phone": "0912...",
-  "external_id": "mc_123",
-  "payload": {}
+  "source": "instagram_manychat",
+  "name": "حسینی",
+  "phone": "09124712948",
+  "external_id": "877781495",
+  "payload": {
+    "service": "اندولیفت",
+    "ig_username": "massod.hoseini"
+  }
 }
 ```
 
-`source`: `instagram` | `whatsapp` | `site`
+**`source`** — aliasهای پشتیبانی‌شده:
+
+| alias | LeadSource |
+|-------|------------|
+| `instagram`, `instagram_manychat`, `manychat` | INSTAGRAM |
+| `whatsapp`, `whatsapp_n8n`, `n8n` | WHATSAPP |
+| `site`, `website`, `web` | SITE |
+
+**`payload`** — آبجکت کلید-مقدار دلخواه. هر مقدار می‌تواند string، number، boolean، array یا object باشد. در `Lead.metadata` ذخیره و در جزئیات لید نمایش داده می‌شود.
+
+مثال با `service` به‌صورت آرایه:
+
+```json
+"payload": { "service": ["اندولیفت", "بوتاکس"] }
+```
 
 ## CRM خارجی
 

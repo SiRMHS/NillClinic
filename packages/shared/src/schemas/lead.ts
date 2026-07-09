@@ -47,13 +47,59 @@ export const createFollowUpSchema = z.object({
   notes: z.string().optional(),
 });
 
-export const leadWebhookSchema = z.object({
-  source: z.enum(["instagram", "whatsapp", "site"]),
-  name: z.string().optional(),
-  phone: z.string().optional(),
-  external_id: z.string().optional(),
-  payload: z.record(z.unknown()).optional(),
-});
+export type WebhookLeadSource = "instagram" | "whatsapp" | "site";
+
+const webhookSourceAliases: Record<string, WebhookLeadSource> = {
+  instagram: "instagram",
+  instagram_manychat: "instagram",
+  manychat: "instagram",
+  whatsapp: "whatsapp",
+  whatsapp_n8n: "whatsapp",
+  n8n: "whatsapp",
+  site: "site",
+  website: "site",
+  web: "site",
+};
+
+export function normalizeWebhookSource(raw: string): WebhookLeadSource | null {
+  return webhookSourceAliases[raw.toLowerCase()] ?? null;
+}
+
+const payloadValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.union([z.string(), z.number()])),
+  z.record(z.unknown()),
+]);
+
+export const leadWebhookSchema = z
+  .object({
+    source: z.string().min(1),
+    name: z.string().optional(),
+    phone: z.string().optional(),
+    external_id: z.string().optional(),
+    payload: z.record(payloadValueSchema).optional(),
+  })
+  .transform((data, ctx) => {
+    const normalized = normalizeWebhookSource(data.source);
+    if (!normalized) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `منبع نامعتبر: ${data.source}. مقادیر مجاز: instagram, instagram_manychat, whatsapp, site و ...`,
+        path: ["source"],
+      });
+      return z.NEVER;
+    }
+    return {
+      source: normalized,
+      rawSource: data.source,
+      name: data.name,
+      phone: data.phone,
+      external_id: data.external_id,
+      payload: data.payload,
+    };
+  });
 
 export type CreateLeadInput = z.infer<typeof createLeadSchema>;
 export type LeadWebhookPayload = z.infer<typeof leadWebhookSchema>;

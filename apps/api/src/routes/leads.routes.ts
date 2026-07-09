@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { prisma, AuditAction } from "@jordan/db";
+import { prisma, type Prisma } from "@jordan/db";
 import {
   assignLeadSchema,
   createFollowUpSchema,
@@ -524,8 +524,16 @@ leadsRouter.delete("/:id", async (req, res, next) => {
 
 export const leadsWebhookRouter = Router();
 
+async function safeWebhookLog(data: Prisma.WebhookLogCreateInput) {
+  try {
+    await prisma.webhookLog.create({ data });
+  } catch (err) {
+    console.error("[webhook log]", err instanceof Error ? err.message : err);
+  }
+}
+
 /** Webhook for Manychat / n8n — secured via shared secret header */
-leadsWebhookRouter.post("/", async (req, res, next) => {
+leadsWebhookRouter.post("/", async (req, res) => {
   const ipAddress = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "unknown").split(",")[0]?.trim() ?? "unknown";
 
   try {
@@ -537,16 +545,14 @@ leadsWebhookRouter.post("/", async (req, res, next) => {
         .trim();
 
       if (!secret || secret !== configuredSecret) {
-        await prisma.webhookLog.create({
-          data: {
-            source: req.body?.source ?? "unknown",
-            action: "rejected",
-            name: req.body?.name,
-            phone: req.body?.phone,
-            externalRef: req.body?.external_id,
-            ipAddress,
-            metadata: { reason: "invalid_secret" },
-          },
+        await safeWebhookLog({
+          source: req.body?.source ?? "unknown",
+          action: "rejected",
+          name: req.body?.name,
+          phone: req.body?.phone,
+          externalRef: req.body?.external_id,
+          ipAddress,
+          metadata: { reason: "invalid_secret" },
         });
         res.status(401).json({ error: "Unauthorized" });
         return;
@@ -555,74 +561,82 @@ leadsWebhookRouter.post("/", async (req, res, next) => {
 
     const payload = leadWebhookSchema.parse(req.body);
     const phone = payload.phone?.replace(/\s+/g, "");
+    const logSource = payload.rawSource;
 
     if (phone) {
       const existing = await prisma.lead.findFirst({
         where: { mobileEnc: encrypt(phone) },
       });
       if (existing) {
-        await prisma.webhookLog.create({
-          data: {
-            source: payload.source,
-            action: "duplicate",
-            name: payload.name,
-            phone,
-            externalRef: payload.external_id,
-            ipAddress,
-            metadata: { existingLeadId: existing.id },
-          },
+        await safeWebhookLog({
+          source: logSource,
+          action: "duplicate",
+          name: payload.name,
+          phone,
+          externalRef: payload.external_id,
+          ipAddress,
+          metadata: { existingLeadId: existing.id },
         });
         res.status(200).json({ id: existing.id, duplicate: true });
         return;
       }
     }
 
+    const metadata = {
+      ...(payload.payload ?? {}),
+      _webhookSource: payload.rawSource,
+    };
+
     const lead = await prisma.lead.create({
       data: {
         source: sourceMap[payload.source],
         fullNameEnc: payload.name ? encrypt(payload.name) : null,
         mobileEnc: phone ? encrypt(phone) : null,
-        metadata: JSON.parse(JSON.stringify(payload.payload ?? {})),
+        metadata: JSON.parse(JSON.stringify(metadata)),
         externalRef: payload.external_id,
       },
     });
 
-    await prisma.webhookLog.create({
-      data: {
-        source: payload.source,
-        action: "created",
-        name: payload.name,
-        phone,
-        externalRef: payload.external_id,
-        ipAddress,
-        metadata: { leadId: lead.id },
-      },
+    await safeWebhookLog({
+      source: logSource,
+      action: "created",
+      name: payload.name,
+      phone,
+      externalRef: payload.external_id,
+      ipAddress,
+      metadata: { leadId: lead.id },
     });
 
-    await prisma.auditLog.create({
-      data: {
-        action: "WEBHOOK_RECEIVED",
-        resource: `lead:${lead.id}`,
-        ipAddress,
-        metadata: { source: payload.source, externalRef: payload.external_id },
-      },
-    });
+    try {
+      await prisma.auditLog.create({
+        data: {
+          action: "WEBHOOK_RECEIVED",
+          resource: `lead:${lead.id}`,
+          ipAddress,
+          metadata: { source: logSource, externalRef: payload.external_id },
+        },
+      });
+    } catch (err) {
+      console.error("[webhook audit]", err instanceof Error ? err.message : err);
+    }
 
     res.status(201).json({ id: lead.id });
   } catch (e) {
     if (e instanceof ZodError) {
-      await prisma.webhookLog.create({
-        data: {
-          source: req.body?.source ?? "unknown",
-          action: "rejected",
-          name: req.body?.name,
-          phone: req.body?.phone,
-          externalRef: req.body?.external_id,
-          ipAddress,
-          metadata: { validationError: (e as Error).message },
-        },
+      await safeWebhookLog({
+        source: req.body?.source ?? "unknown",
+        action: "rejected",
+        name: req.body?.name,
+        phone: req.body?.phone,
+        externalRef: req.body?.external_id,
+        ipAddress,
+        metadata: { validationError: JSON.parse(JSON.stringify(e.errors)) },
+        errorMsg: e.message,
       });
+      res.status(400).json({ error: "داده نامعتبر", details: e.errors });
+      return;
     }
-    next(e);
+    console.error("[webhook]", e instanceof Error ? e.message : e);
+    res.status(500).json({ error: "خطای داخلی سرور" });
   }
 });
