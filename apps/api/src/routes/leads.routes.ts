@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma, type Prisma } from "@jordan/db";
 import {
+  assignLeadCampaignSchema,
   assignLeadSchema,
   createFollowUpSchema,
   createLeadSchema,
@@ -26,6 +27,7 @@ const leadInclude = {
   followUps: { orderBy: { scheduledAt: "asc" as const }, take: 5, include: { user: { select: { id: true, fullName: true } } } },
   appointments: { orderBy: { createdAt: "desc" as const }, take: 3, include: { user: { select: { id: true, fullName: true } } } },
   assignedUser: { select: { id: true, fullName: true, email: true } },
+  campaign: { select: { id: true, name: true, slug: true } },
 };
 
 function isSuperAdmin(req: { user?: { permissions?: string[] } }): boolean {
@@ -87,6 +89,7 @@ leadsRouter.get("/", async (req, res, next) => {
     const followUp = req.query.followUp as string | undefined;
     const hasAppointment = req.query.hasAppointment as string | undefined;
     const assignedUserId = req.query.assignedUserId as string | undefined;
+    const campaignId = req.query.campaignId as string | undefined;
     const sourceStr = Array.isArray(source) ? (source as string[]).join(",") : source as string;
     const sourceList = sourceStr ? sourceStr.split(",").filter(Boolean) as ("INSTAGRAM" | "WHATSAPP" | "SITE" | "MANUAL")[] : undefined;
 
@@ -94,6 +97,7 @@ leadsRouter.get("/", async (req, res, next) => {
     if (status) where.status = status as "NEW" | "CONTACTED" | "CONVERTED" | "LOST";
     if (sourceList) where.source = { in: sourceList };
     if (assignedUserId) where.assignedUserId = assignedUserId;
+    if (campaignId) where.campaignId = campaignId;
 
     if (followUp === "due") {
       where.nextFollowUpAt = { lte: new Date() };
@@ -124,6 +128,29 @@ leadsRouter.get("/", async (req, res, next) => {
   }
 });
 
+leadsRouter.get("/counts", async (req, res, next) => {
+  try {
+    const userId = req.user?.sub;
+    const whereNewUnassigned: Prisma.LeadWhereInput = { status: "NEW", assignedUserId: null };
+    const whereMyActive: Prisma.LeadWhereInput = { assignedUserId: userId ?? undefined, status: { in: ["NEW", "CONTACTED"] } };
+    const whereMyOverdue: Prisma.LeadWhereInput = {
+      assignedUserId: userId ?? undefined,
+      nextFollowUpAt: { lte: new Date() },
+      status: { in: ["NEW", "CONTACTED"] },
+    };
+
+    const [newUnassigned, myActive, myOverdueFollowUps] = await Promise.all([
+      prisma.lead.count({ where: whereNewUnassigned }),
+      prisma.lead.count({ where: whereMyActive }),
+      prisma.lead.count({ where: whereMyOverdue }),
+    ]);
+
+    res.json({ newUnassigned, myActive, myOverdueFollowUps });
+  } catch (e) {
+    next(e);
+  }
+});
+
 leadsRouter.get("/:id", async (req, res, next) => {
   try {
     const lead = await prisma.lead.findUnique({
@@ -134,6 +161,7 @@ leadsRouter.get("/:id", async (req, res, next) => {
         followUps: { orderBy: { scheduledAt: "asc" }, include: { user: { select: { id: true, fullName: true } } } },
         appointments: { orderBy: { createdAt: "desc" }, include: { user: { select: { id: true, fullName: true } } } },
         assignedUser: { select: { id: true, fullName: true, email: true } },
+        campaign: { select: { id: true, name: true, slug: true } },
       },
     });
     if (!lead) {
@@ -168,6 +196,7 @@ leadsRouter.post("/", async (req, res, next) => {
             source: body.source,
             fullNameEnc: body.fullName ? encrypt(body.fullName) : undefined,
             assignedUserId: req.user?.sub,
+            campaignId: body.campaignId ?? undefined,
           },
           include: leadInclude,
         });
@@ -184,6 +213,7 @@ leadsRouter.post("/", async (req, res, next) => {
         metadata: JSON.parse(JSON.stringify(body.metadata)),
         externalRef: body.externalRef,
         assignedUserId: req.user?.sub,
+        campaignId: body.campaignId,
       },
       include: leadInclude,
     });
@@ -256,6 +286,41 @@ leadsRouter.patch("/:id/status", async (req, res, next) => {
         contactedAt: status === "CONTACTED" ? new Date() : undefined,
         convertedAt: status === "CONVERTED" ? new Date() : undefined,
       },
+      include: leadInclude,
+    });
+    res.json(decryptLead(updated));
+  } catch (e) {
+    next(e);
+  }
+});
+
+leadsRouter.patch("/:id/campaign", async (req, res, next) => {
+  try {
+    const { campaignId } = assignLeadCampaignSchema.parse(req.body);
+    const lead = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { assignedUserId: true, campaignId: true } });
+    if (!lead) { res.status(404).json({ error: "لید یافت نشد" }); return; }
+    if (!canModifyLead(lead, req.user?.sub, req)) { res.status(403).json({ error: "این لید تخصیص داده شده و فقط مالک آن یا سوپر ادمین می‌تواند تغییر دهد" }); return; }
+
+    if (campaignId) {
+      const campaign = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { id: true, name: true } });
+      if (!campaign) { res.status(404).json({ error: "کمپین یافت نشد" }); return; }
+    }
+
+    if (campaignId !== lead.campaignId) {
+      const campaign = campaignId ? await prisma.campaign.findUnique({ where: { id: campaignId }, select: { name: true } }) : null;
+      await prisma.leadInteraction.create({
+        data: {
+          leadId: req.params.id,
+          userId: req.user?.sub,
+          type: "NOTE",
+          content: campaign ? `کمپین لید به «${campaign.name}» تغییر کرد` : "کمپین لید حذف شد",
+        },
+      });
+    }
+
+    const updated = await prisma.lead.update({
+      where: { id: req.params.id },
+      data: { campaignId },
       include: leadInclude,
     });
     res.json(decryptLead(updated));
@@ -587,6 +652,20 @@ leadsWebhookRouter.post("/", async (req, res) => {
       _webhookSource: payload.rawSource,
     };
 
+    let campaignId: string | null = null;
+    if (payload.campaign_id || payload.campaign_slug) {
+      const campaign = await prisma.campaign.findFirst({
+        where: {
+          OR: [
+            ...(payload.campaign_id ? [{ id: payload.campaign_id }] : []),
+            ...(payload.campaign_slug ? [{ slug: payload.campaign_slug }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      if (campaign) campaignId = campaign.id;
+    }
+
     const lead = await prisma.lead.create({
       data: {
         source: sourceMap[payload.source],
@@ -594,6 +673,7 @@ leadsWebhookRouter.post("/", async (req, res) => {
         mobileEnc: phone ? encrypt(phone) : null,
         metadata: JSON.parse(JSON.stringify(metadata)),
         externalRef: payload.external_id,
+        campaignId,
       },
     });
 

@@ -12,6 +12,7 @@ export const createLeadSchema = z.object({
   mobile: z.string().min(10).optional(),
   metadata: z.record(z.unknown()).default({}),
   externalRef: z.string().optional(),
+  campaignId: z.string().optional(),
 });
 
 export const updateLeadStatusSchema = z.object({
@@ -79,6 +80,8 @@ export const leadWebhookSchema = z
     name: z.string().optional(),
     phone: z.string().optional(),
     external_id: z.string().optional(),
+    campaign_id: z.string().optional(),
+    campaign_slug: z.string().optional(),
     payload: z.record(payloadValueSchema).optional(),
   })
   .transform((data, ctx) => {
@@ -97,6 +100,8 @@ export const leadWebhookSchema = z
       name: data.name,
       phone: data.phone,
       external_id: data.external_id,
+      campaign_id: data.campaign_id,
+      campaign_slug: data.campaign_slug,
       payload: data.payload,
     };
   });

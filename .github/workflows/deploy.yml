@@ -8,7 +8,7 @@ on:
 env:
   REGISTRY: ghcr.io
   # تگ ایمیج — روی سرور در .env همان مقدار را برای IMAGE_TAG بگذار
-  PACKAGE_TAG: "1.2"
+  PACKAGE_TAG: "1.4"
   NODE_VERSION: "20"
   PNPM_VERSION: "10.14.0"
 

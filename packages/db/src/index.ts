@@ -5,6 +5,7 @@ import type {
   AuditAction as AuditActionType,
   CallOutcome as CallOutcomeType,
   CallStatus as CallStatusType,
+  CampaignStatus as CampaignStatusType,
   FollowUpStatus as FollowUpStatusType,
   LeadSource as LeadSourceType,
   LeadStatus as LeadStatusType,
@@ -13,6 +14,7 @@ import type {
   SyncEntity as SyncEntityType,
   SyncStatus as SyncStatusType,
   SyncTrigger as SyncTriggerType,
+  SyncJobStatus as SyncJobStatusType,
 } from "@prisma/client";
 
 // Prisma ships as CJS; ESM named imports/re-exports break at runtime in Node.
@@ -37,6 +39,9 @@ export type CallOutcome = CallOutcomeType;
 export const FollowUpStatus = pkg.FollowUpStatus;
 export type FollowUpStatus = FollowUpStatusType;
 
+export const CampaignStatus = pkg.CampaignStatus;
+export type CampaignStatus = CampaignStatusType;
+
 export const SyncEntity = pkg.SyncEntity;
 export type SyncEntity = SyncEntityType;
 
@@ -45,5 +50,8 @@ export type SyncStatus = SyncStatusType;
 
 export const SyncTrigger = pkg.SyncTrigger;
 export type SyncTrigger = SyncTriggerType;
+
+export const SyncJobStatus = pkg.SyncJobStatus;
+export type SyncJobStatus = SyncJobStatusType;
 
 export type { Prisma };

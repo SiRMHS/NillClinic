@@ -203,6 +203,31 @@ enum FollowUpStatus {
   CANCELLED
 }
 
+enum CampaignStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+model Campaign {
+  id          String         @id @default(cuid())
+  name        String
+  slug        String?        @unique
+  source      LeadSource?
+  status      CampaignStatus @default(ACTIVE)
+  budget      Int?
+  startDate   DateTime?      @map("start_date")
+  endDate     DateTime?      @map("end_date")
+  notes       String?
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt      @map("updated_at")
+
+  leads Lead[]
+
+  @@index([status])
+  @@map("campaigns")
+}
+
 model Lead {
   id                 String        @id @default(cuid())
   source             LeadSource
@@ -213,6 +238,7 @@ model Lead {
   externalRef        String?       @map("external_ref") // Manychat / n8n id
   convertedPatientId String?       @map("converted_patient_id")
   assignedUserId     String?       @map("assigned_user_id")
+  campaignId         String?       @map("campaign_id")
   contactedAt        DateTime?     @map("contacted_at")
   convertedAt        DateTime?     @map("converted_at")
   nextFollowUpAt     DateTime?     @map("next_follow_up_at")
@@ -222,8 +248,9 @@ model Lead {
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
 
-  convertedPatient Patient? @relation("LeadConvertedPatient", fields: [convertedPatientId], references: [id])
-  assignedUser     User?    @relation("LeadAssignedUser", fields: [assignedUserId], references: [id])
+  convertedPatient Patient?  @relation("LeadConvertedPatient", fields: [convertedPatientId], references: [id])
+  assignedUser     User?     @relation("LeadAssignedUser", fields: [assignedUserId], references: [id])
+  campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
   interactions  LeadInteraction[]
   calls         LeadCall[]
@@ -232,6 +259,7 @@ model Lead {
 
   @@index([source, status])
   @@index([assignedUserId])
+  @@index([campaignId])
   @@index([nextFollowUpAt])
   @@index([createdAt])
   @@map("leads")
@@ -328,6 +356,43 @@ enum SyncStatus {
 enum SyncTrigger {
   CRON
   MANUAL
+  AUTO
+}
+
+enum SyncJobStatus {
+  IDLE
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+// Per-entity persistent checkpoint for the auto full-sync (survives restart).
+model SyncJobState {
+  entity          SyncEntity    @id
+  status          SyncJobStatus @default(IDLE)
+  lastPage        Int           @default(1) @map("last_page")
+  recordsRead     Int           @default(0) @map("records_read")
+  recordsUpserted Int           @default(0) @map("records_upserted")
+  recordsFailed   Int           @default(0) @map("records_failed")
+  reachedEnd      Boolean       @default(false) @map("reached_end")
+  startedAt       DateTime?     @map("started_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  finishedAt      DateTime?     @map("finished_at")
+  errorMessage    String?       @map("error_message")
+
+  @@map("sync_job_states")
+}
+
+// Singleton row (id = 1) holding the auto-sync toggle + throttle settings.
+model SyncSettings {
+  id              Int      @id @default(1)
+  autoSyncEnabled Boolean  @default(false) @map("auto_sync_enabled")
+  throttleDelayMs Int      @default(500) @map("throttle_delay_ms")
+  pageSize        Int      @default(50) @map("page_size")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("sync_settings")
 }
 
 model SyncLog {

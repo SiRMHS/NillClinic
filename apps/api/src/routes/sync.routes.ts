@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { runManualSync, purgeCrmData } from "@jordan/sync-engine";
+import { runManualSync, purgeCrmData, ALL_SYNC_ENTITIES } from "@jordan/sync-engine";
 import type { SyncConfig } from "@jordan/sync-engine";
 import { prisma, SyncEntity, AuditAction } from "@jordan/db";
 import { createEncryptFn } from "../security/encryption.js";
@@ -8,7 +8,20 @@ import {
   cleanupStaleSyncLogs,
   finalizeRunningSyncLogs,
   getRunningSyncEntities,
+  getAllJobStates,
+  getSyncSettings,
+  setAutoSyncEnabled,
+  resetJobState,
+  resetAllJobStates,
 } from "../services/sync-state.service.js";
+import {
+  startAutoSync,
+  stopAutoSync,
+  isAutoSyncRunning,
+  resumeAutoSyncOnStartup,
+} from "../services/auto-sync.runner.js";
+
+export { resumeAutoSyncOnStartup };
 
 export const syncRouter = Router();
 
@@ -71,11 +84,95 @@ syncRouter.get("/status", async (_req, res, next) => {
   }
 });
 
+syncRouter.get("/auto", async (_req, res, next) => {
+  try {
+    const [settings, jobStates] = await Promise.all([getSyncSettings(), getAllJobStates()]);
+    res.json({
+      autoSyncEnabled: settings.autoSyncEnabled,
+      throttleDelayMs: settings.throttleDelayMs,
+      pageSize: settings.pageSize,
+      isRunning: isAutoSyncRunning(),
+      jobStates: jobStates.map((j) => ({
+        entity: j.entity,
+        status: j.status,
+        lastPage: j.lastPage,
+        recordsRead: j.recordsRead,
+        recordsUpserted: j.recordsUpserted,
+        recordsFailed: j.recordsFailed,
+        reachedEnd: j.reachedEnd,
+        startedAt: j.startedAt,
+        finishedAt: j.finishedAt,
+        errorMessage: j.errorMessage,
+        updatedAt: j.updatedAt,
+      })),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+syncRouter.post("/auto", async (req, res, next) => {
+  try {
+    const body = z.object({ enabled: z.boolean() }).parse(req.body);
+    const settings = await getSyncSettings();
+
+    if (body.enabled) {
+      await setAutoSyncEnabled(true);
+      const result = await startAutoSync();
+      if (!result.started) {
+        await setAutoSyncEnabled(false);
+        res.status(409).json({ error: result.reason ?? "سینک شروع نشد" });
+        return;
+      }
+    } else {
+      await stopAutoSync();
+    }
+
+    if (req.user?.email) {
+      const user = await prisma.user.findUnique({ where: { email: req.user.email } });
+      if (user) {
+        await prisma.auditLog.create({
+          data: {
+            userId: user.id,
+            action: AuditAction.SYNC_MANUAL,
+            metadata: { action: "auto_sync_toggle", enabled: body.enabled },
+          },
+        });
+      }
+    }
+
+    const updated = await getSyncSettings();
+    res.json({ ok: true, autoSyncEnabled: updated.autoSyncEnabled, isRunning: isAutoSyncRunning() });
+  } catch (e) {
+    next(e);
+  }
+});
+
+syncRouter.post("/auto/reset", async (req, res, next) => {
+  try {
+    if (isAutoSyncRunning()) {
+      res.status(409).json({ error: "ابتدا سینک خودکار را خاموش کنید" });
+      return;
+    }
+    const entity = req.body?.entity as string | undefined;
+    if (entity) {
+      const parsed = z.nativeEnum(SyncEntity).parse(entity);
+      await resetJobState(parsed);
+    } else {
+      await resetAllJobStates();
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
 syncRouter.post("/cancel", async (_req, res, next) => {
   try {
     if (currentAbortController) {
       currentAbortController.abort();
     }
+    await stopAutoSync();
 
     const finalized = await finalizeRunningSyncLogs("سینک توسط کاربر لغو شد");
 
@@ -94,7 +191,7 @@ syncRouter.post("/cancel", async (_req, res, next) => {
 
 syncRouter.post("/purge", async (req, res, next) => {
   try {
-    if (isBackgroundSyncActive()) {
+    if (isBackgroundSyncActive() || isAutoSyncRunning()) {
       res.status(409).json({ error: "ابتدا سینک در حال اجرا را متوقف کنید" });
       return;
     }
@@ -122,7 +219,7 @@ syncRouter.post("/purge", async (req, res, next) => {
 
 syncRouter.post("/run", async (req, res, next) => {
   try {
-    if (isBackgroundSyncActive()) {
+    if (isBackgroundSyncActive() || isAutoSyncRunning()) {
       res.status(409).json({ error: "سینک دیگری در حال اجراست" });
       return;
     }
@@ -157,7 +254,7 @@ syncRouter.post("/run", async (req, res, next) => {
 
 syncRouter.post("/run/:entity", async (req, res, next) => {
   try {
-    if (isBackgroundSyncActive()) {
+    if (isBackgroundSyncActive() || isAutoSyncRunning()) {
       res.status(409).json({ error: "سینک دیگری در حال اجراست" });
       return;
     }

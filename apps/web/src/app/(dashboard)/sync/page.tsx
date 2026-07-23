@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import {
   Table,
   TableBody,
@@ -37,6 +38,8 @@ import {
   Filter,
   Loader2,
   Bug,
+  Power,
+  RotateCcw,
 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
@@ -44,7 +47,8 @@ import { cn } from "@/lib/utils"
 
 type SyncEntity = "PATIENTS" | "SERVICES" | "RESERVES" | "TREATMENTS" | "RECEPTIONS"
 type SyncStatus = "STARTED" | "SUCCESS" | "PARTIAL" | "FAILED"
-type SyncTrigger = "CRON" | "MANUAL"
+type SyncTrigger = "CRON" | "MANUAL" | "AUTO"
+type JobStatus = "IDLE" | "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED"
 
 interface SyncLog {
   id: string
@@ -58,6 +62,28 @@ interface SyncLog {
   metadata?: { pagesProcessed?: number; errors?: { recordId: string; message: string }[] }
   startedAt: string
   finishedAt?: string
+}
+
+interface JobState {
+  entity: SyncEntity
+  status: JobStatus
+  lastPage: number
+  recordsRead: number
+  recordsUpserted: number
+  recordsFailed: number
+  reachedEnd: boolean
+  startedAt: string | null
+  finishedAt: string | null
+  errorMessage: string | null
+  updatedAt: string
+}
+
+interface AutoState {
+  autoSyncEnabled: boolean
+  throttleDelayMs: number
+  pageSize: number
+  isRunning: boolean
+  jobStates: JobState[]
 }
 
 interface ErrorPage {
@@ -93,6 +119,14 @@ const statusConfig: Record<SyncStatus, { label: string; variant: "default" | "se
   FAILED: { label: "ناموفق", variant: "destructive", icon: XCircle },
 }
 
+const jobStatusConfig: Record<JobStatus, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
+  IDLE: { label: "شروع نشده", variant: "outline" },
+  RUNNING: { label: "در حال اجرا", variant: "secondary" },
+  COMPLETED: { label: "تکمیل شده", variant: "default" },
+  PARTIAL: { label: "ناقص", variant: "outline" },
+  FAILED: { label: "ناموفق", variant: "destructive" },
+}
+
 function toPersianNum(num: number | string) {
   return num.toString().replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[parseInt(d, 10)]!)
 }
@@ -116,23 +150,19 @@ function timeAgo(iso: string) {
   return `${Math.floor(hours / 24)} روز پیش`
 }
 
-interface SyncRunStatus {
-  isRunning: boolean
-  runningEntities: SyncEntity[]
-  hasActiveController?: boolean
-}
-
 export default function SyncPage() {
   const { user, hasPermission } = useAuth()
   const [logs, setLogs] = useState<SyncLog[]>([])
   const [loading, setLoading] = useState(true)
-  const [syncStatus, setSyncStatus] = useState<SyncRunStatus>({ isRunning: false, runningEntities: [] })
+  const [autoState, setAutoState] = useState<AutoState | null>(null)
   const [showErrors, setShowErrors] = useState<Set<string>>(new Set())
   const [showConfig, setShowConfig] = useState(false)
   const [filterEntity, setFilterEntity] = useState<SyncEntity | "ALL">("ALL")
   const [cancelling, setCancelling] = useState(false)
   const [purging, setPurging] = useState(false)
   const [startingSync, setStartingSync] = useState(false)
+  const [togglingAuto, setTogglingAuto] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   const [maxPages, setMaxPages] = useState(2)
   const [pageSize, setPageSize] = useState(50)
@@ -141,31 +171,31 @@ export default function SyncPage() {
   const [errorDetails, setErrorDetails] = useState<Record<string, ErrorPage>>({})
   const [loadingErrors, setLoadingErrors] = useState<Set<string>>(new Set())
 
-  const runningEntities = new Set(syncStatus.runningEntities)
-  const isSyncing = syncStatus.isRunning
   const isSuperAdmin = hasPermission("*")
+  const autoRunning = autoState?.isRunning ?? false
+  const anyRunning = autoRunning
 
   const fetchLogs = useCallback(async () => {
     const params = filterEntity !== "ALL" ? `?entity=${filterEntity}` : ""
     return apiFetch<SyncLog[]>(`/api/sync/logs${params}`)
   }, [filterEntity])
 
-  const fetchStatus = useCallback(async () => {
-    return apiFetch<SyncRunStatus>("/api/sync/status")
+  const fetchAuto = useCallback(async () => {
+    return apiFetch<AutoState>("/api/sync/auto")
   }, [])
 
   const refresh = useCallback(async () => {
     try {
-      const [status, data] = await Promise.all([fetchStatus(), fetchLogs()])
+      const [auto, data] = await Promise.all([fetchAuto(), fetchLogs()])
       startTransition(() => {
-        setSyncStatus(status)
+        setAutoState(auto)
         setLogs(data)
         setLoading(false)
       })
     } catch {
       startTransition(() => setLoading(false))
     }
-  }, [fetchStatus, fetchLogs])
+  }, [fetchAuto, fetchLogs])
 
   useEffect(() => {
     void refresh()
@@ -173,8 +203,57 @@ export default function SyncPage() {
     return () => clearInterval(id)
   }, [refresh])
 
+  const toggleAuto = async (enabled: boolean) => {
+    setTogglingAuto(true)
+    try {
+      const res = await apiFetch<{ ok: boolean; autoSyncEnabled: boolean; isRunning: boolean }>(
+        "/api/sync/auto",
+        { method: "POST", body: JSON.stringify({ enabled }) },
+      )
+      if (enabled && !res.isRunning) {
+        toast.error("همه بخش‌ها تکمیل شده‌اند — ابتدا وضعیت را ریست کنید")
+      } else {
+        toast.success(enabled ? "سینک کامل خودکار روشن شد" : "سینک کامل خودکار خاموش شد")
+      }
+      await refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "خطا در تغییر وضعیت سینک خودکار")
+    } finally {
+      setTogglingAuto(false)
+    }
+  }
+
+  const forceCancel = async () => {
+    setCancelling(true)
+    try {
+      await apiFetch<{ ok: boolean; finalized: number }>("/api/sync/cancel", { method: "POST" })
+      toast.success("سینک فوراً متوقف شد")
+      await refresh()
+    } catch {
+      toast.error("خطا در توقف سینک")
+    } finally {
+      setCancelling(false)
+    }
+  }
+
+  const resetJobs = async (entity?: SyncEntity) => {
+    setResetting(true)
+    try {
+      await apiFetch<{ ok: boolean }>("/api/sync/auto/reset", {
+        method: "POST",
+        body: JSON.stringify(entity ? { entity } : {}),
+      })
+      toast.success(entity ? `وضعیت ${entityLabels[entity]} ریست شد` : "وضعیت همه بخش‌ها ریست شد")
+      await refresh()
+    } catch {
+      toast.error("خطا در ریست وضعیت")
+    } finally {
+      setResetting(false)
+    }
+  }
+
   const purgeData = async () => {
-    if (!confirm("تمام داده‌های CRM (بیماران، خدمات، رزرو، طرح درمان، پذیرش) پاک می‌شوند. ادامه می‌دهید؟")) {
+    if (!confirm("تمام داده‌های CRM پاک می‌شوند و وضعیت سینک ریست می‌شود. ادامه می‌دهید؟")) {
       return
     }
     setPurging(true)
@@ -183,6 +262,7 @@ export default function SyncPage() {
         "/api/sync/purge",
         { method: "POST" },
       )
+      await resetJobs()
       const total = Object.values(purgeRes.counts).reduce((a, b) => a + b, 0)
       toast.success(`پاکسازی انجام شد — ${total} رکورد حذف شد`)
     } catch {
@@ -195,17 +275,14 @@ export default function SyncPage() {
   const runSync = async (entities?: SyncEntity[]) => {
     const targetEntities = entities ?? Array.from(selectedEntities)
     setStartingSync(true)
-
     try {
       const params = new URLSearchParams()
       params.set("maxPages", String(maxPages))
       params.set("pageSize", String(pageSize))
-
       await apiFetch<{ ok: boolean; started: boolean }>(
         `/api/sync/run?${params}`,
         { method: "POST", body: JSON.stringify({ entities: targetEntities }) },
       )
-
       const names = targetEntities.map((e) => entityLabels[e]).join("، ")
       toast.success(`سینک ${names} شروع شد`)
       await refresh()
@@ -213,19 +290,6 @@ export default function SyncPage() {
       toast.error(err instanceof Error ? err.message : "خطا در شروع سینک")
     } finally {
       setStartingSync(false)
-    }
-  }
-
-  const cancelSync = async () => {
-    setCancelling(true)
-    try {
-      await apiFetch<{ ok: boolean; finalized: number }>("/api/sync/cancel", { method: "POST" })
-      toast.success("سینک متوقف شد")
-      await refresh()
-    } catch {
-      toast.error("خطا در توقف سینک")
-    } finally {
-      setCancelling(false)
     }
   }
 
@@ -269,15 +333,11 @@ export default function SyncPage() {
     })
   }
 
-  const toggleError = (id: string) => {
-    setShowErrors((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
+  const jobMap = new Map(autoState?.jobStates.map((j) => [j.entity, j]))
+  const completedCount = ALL_ENTITIES.filter((e) => jobMap.get(e)?.reachedEnd).length
+  const runningEntities = new Set(
+    autoState?.jobStates.filter((j) => j.status === "RUNNING").map((j) => j.entity) ?? [],
+  )
   const lastStatusPerEntity = ALL_ENTITIES.map((entity) => {
     const last = logs.find((l) => l.entity === entity)
     return { entity, last }
@@ -302,32 +362,85 @@ export default function SyncPage() {
           <Button
             variant="outline"
             onClick={purgeData}
-            disabled={purging || isSyncing}
+            disabled={purging || anyRunning}
             className="text-rose-600 border-rose-200 hover:bg-rose-50"
           >
             <Database />
             {purging ? "در حال پاکسازی..." : "پاکسازی داده‌های CRM"}
           </Button>
-          {isSyncing ? (
-            <Button variant="destructive" onClick={cancelSync} disabled={cancelling} size="lg">
+          {anyRunning && (
+            <Button variant="destructive" onClick={forceCancel} disabled={cancelling} size="lg">
               <Square />
-              {cancelling ? "در حال توقف..." : "توقف سینک"}
-            </Button>
-          ) : (
-            <Button onClick={() => runSync()} disabled={startingSync || selectedEntities.size === 0} size="lg">
-              {startingSync ? <Loader2 className="animate-spin" /> : <Play />}
-              اجرای سینک
+              {cancelling ? "در حال توقف..." : "لغو فورس"}
             </Button>
           )}
         </div>
       </div>
+
+      {/* Auto full-sync switch */}
+      <Card className={cn("border-2", autoRunning ? "border-primary/60" : "border-border")}>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between gap-2 text-base">
+            <div className="flex items-center gap-2">
+              <Power className="size-4" />
+              سینک کامل خودکار
+            </div>
+            <div className="flex items-center gap-3">
+              {autoState && (
+                <span className="text-xs text-muted-foreground">
+                  {toPersianNum(completedCount)} از {toPersianNum(ALL_ENTITIES.length)} بخش تکمیل
+                </span>
+              )}
+              <Switch
+                checked={autoState?.autoSyncEnabled ?? false}
+                disabled={togglingAuto || !autoState}
+                onCheckedChange={(checked) => void toggleAuto(checked)}
+              />
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            وقتی روشن باشد، تمام بخش‌ها چانک‌به‌چانک (هر چانک {autoState ? toPersianNum(autoState.pageSize) : "۵۰"} رکورد با تاخیر {autoState ? toPersianNum(autoState.throttleDelayMs) : "۵۰۰"} میلی‌ثانیه) تا تکمیل کامل سینک می‌شوند — بدون فشار روی سرور شما یا سرور API. وضعیت در دیتابیس ذخیره می‌شود و بعد از ری‌استارت ادامه می‌یابد.
+          </p>
+
+          {autoRunning && (
+            <div className="flex items-center gap-2 text-sm">
+              <Loader2 className="size-4 animate-spin text-primary" />
+              <span className="font-medium">در حال هماهنگ‌سازی...</span>
+              <span className="text-muted-foreground">
+                (بخش‌های در حال اجرا: {Array.from(runningEntities).map((e) => entityLabels[e]).join("، ") || "—"})
+              </span>
+            </div>
+          )}
+
+          <div className="h-2 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-500"
+              style={{ width: `${(completedCount / ALL_ENTITIES.length) * 100}%` }}
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => resetJobs()}
+              disabled={resetting || autoRunning}
+            >
+              <RotateCcw className="size-3.5" />
+              ریست وضعیت همه بخش‌ها
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {showConfig && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Settings2 />
-              تنظیمات سینک
+              تنظیمات سینک دستی
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -341,7 +454,7 @@ export default function SyncPage() {
                   value={maxPages}
                   onChange={(e) => setMaxPages(Number(e.target.value) || 1)}
                 />
-                <p className="text-xs text-muted-foreground">تعداد صفحاتی که از هر بخش دریافت شود</p>
+                <p className="text-xs text-muted-foreground">تعداد صفحاتی که از هر بخش دریافت شود (سینک دستی)</p>
               </div>
               <div className="space-y-2">
                 <Label>تعداد رکورد در هر صفحه</Label>
@@ -370,69 +483,29 @@ export default function SyncPage() {
                 </div>
               </div>
             </div>
+            <div className="mt-4">
+              <Button onClick={() => runSync()} disabled={startingSync || selectedEntities.size === 0 || anyRunning}>
+                {startingSync ? <Loader2 className="animate-spin" /> : <Play />}
+                اجرای سینک دستی
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Progress indicator when syncing */}
-      {isSyncing && (
-        <Card className="border-primary/30">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Loader2 className="size-4 animate-spin" />
-              در حال هماهنگ‌سازی...
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {syncStatus.runningEntities.map((entity) => {
-              const lastRunningLog = runningLogs.find((l) => l.entity === entity)
-              const pages = lastRunningLog?.metadata?.pagesProcessed ?? 0
-              const pct = maxPages > 0 ? Math.min(Math.round((pages / maxPages) * 100), 99) : 0
-              const label = entityLabels[entity]
-              return (
-                <div key={entity} className="space-y-1.5">
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
-                      <RefreshCw className={cn("size-3.5 animate-spin", entityColors[entity])} />
-                      <span className="font-medium">{label}</span>
-                    </div>
-                    <span className="text-xs text-muted-foreground">
-                      صفحه {toPersianNum(pages)} از {toPersianNum(maxPages)}
-                    </span>
-                  </div>
-                  <div className="h-2 rounded-full bg-muted overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all duration-500"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  {lastRunningLog && (
-                    <div className="text-[10px] text-muted-foreground flex gap-3">
-                      <span>خوانده: {toPersianNum(lastRunningLog.recordsRead)}</span>
-                      <span>به‌روز: {toPersianNum(lastRunningLog.recordsUpserted)}</span>
-                      {lastRunningLog.recordsFailed > 0 && (
-                        <span className="text-destructive">خطا: {toPersianNum(lastRunningLog.recordsFailed)}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {lastStatusPerEntity.map(({ entity, last }) => {
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+        {ALL_ENTITIES.map((entity) => {
+          const job = jobMap.get(entity)
           const syncing = runningEntities.has(entity)
-          const runningLog = runningLogs.find((l) => l.entity === entity)
+          const completed = job?.reachedEnd
           return (
             <Card
               key={entity}
               className={cn(
                 "relative",
-                last?.status === "FAILED" && "border-destructive/50",
+                job?.status === "FAILED" && "border-destructive/50",
                 syncing && "border-primary/50",
+                completed && "border-emerald-500/40",
               )}
             >
               <CardContent className="p-4">
@@ -441,102 +514,78 @@ export default function SyncPage() {
                     <Database className={cn("size-5", entityColors[entity])} />
                     <div>
                       <div className="text-sm font-medium">{entityLabels[entity]}</div>
-                      {last ? (
-                        <div className="text-[10px] text-muted-foreground mt-0.5">
-                          {timeAgo(last.startedAt)}
-                        </div>
-                      ) : (
-                        <div className="text-[10px] text-muted-foreground mt-0.5">هنوز سینک نشده</div>
-                      )}
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        {job?.updatedAt ? timeAgo(job.updatedAt) : "هنوز سینک نشده"}
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1">
-                    {last && !syncing && (
-                      <Badge variant={statusConfig[last.status].variant} className="text-[10px]">
-                        {statusConfig[last.status].label}
+                    {job && (
+                      <Badge variant={jobStatusConfig[job.status].variant} className="text-[10px] gap-1">
+                        {syncing && <Loader2 className="size-3 animate-spin" />}
+                        {jobStatusConfig[job.status].label}
                       </Badge>
                     )}
-                    {syncing && (
-                      <Badge variant="secondary" className="text-[10px] gap-1">
-                        <Loader2 className="size-3 animate-spin" />
-                        در حال اجرا
+                    {completed && (
+                      <Badge variant="default" className="text-[10px] gap-1 bg-emerald-600">
+                        <CheckCircle2 className="size-3" />
+                        کامل
                       </Badge>
                     )}
-                    {last?.metadata?.pagesProcessed && !syncing && (
+                    {job && !completed && (
                       <span className="text-[10px] text-muted-foreground">
-                        {toPersianNum(last.metadata.pagesProcessed)} صفحه
+                        صفحه {toPersianNum(job.lastPage)}
                       </span>
                     )}
                   </div>
                 </div>
 
-                {/* Progress bar for syncing entity */}
-                {syncing && (
-                  <div className="mt-3">
-                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-primary animate-pulse"
-                        style={{
-                          width: `${runningLog?.metadata?.pagesProcessed
-                            ? Math.min(Math.round((runningLog.metadata.pagesProcessed / maxPages) * 100), 99)
-                            : 5}%`
-                        }}
-                      />
-                    </div>
-                    {runningLog && (
-                      <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[10px]">
-                        <div>
-                          <div className="font-semibold">{toPersianNum(runningLog.recordsRead)}</div>
-                          <div className="text-muted-foreground">خوانده</div>
-                        </div>
-                        <div>
-                          <div className="font-semibold text-emerald-600 dark:text-emerald-400">
-                            {toPersianNum(runningLog.recordsUpserted)}
-                          </div>
-                          <div className="text-muted-foreground">به‌روز</div>
-                        </div>
-                        <div>
-                          <div className={cn("font-semibold", runningLog.recordsFailed > 0 ? "text-destructive" : "")}>
-                            {toPersianNum(runningLog.recordsFailed)}
-                          </div>
-                          <div className="text-muted-foreground">خطا</div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {last && !syncing && (
+                {job && (
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
                     <div>
-                      <div className="font-semibold">{toPersianNum(last.recordsRead)}</div>
+                      <div className="font-semibold">{toPersianNum(job.recordsRead)}</div>
                       <div className="text-muted-foreground">خوانده</div>
                     </div>
                     <div>
                       <div className="font-semibold text-emerald-600 dark:text-emerald-400">
-                        {toPersianNum(last.recordsUpserted)}
+                        {toPersianNum(job.recordsUpserted)}
                       </div>
                       <div className="text-muted-foreground">به‌روز</div>
                     </div>
                     <div>
-                      <div className={cn("font-semibold", last.recordsFailed > 0 ? "text-destructive" : "")}>
-                        {toPersianNum(last.recordsFailed)}
+                      <div className={cn("font-semibold", job.recordsFailed > 0 ? "text-destructive" : "")}>
+                        {toPersianNum(job.recordsFailed)}
                       </div>
                       <div className="text-muted-foreground">خطا</div>
                     </div>
                   </div>
                 )}
 
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mt-2 w-full text-xs"
-                  disabled={syncing}
-                  onClick={() => runSync([entity])}
-                >
-                  <Play className="size-3 ml-1" />
-                  سینک {entityLabels[entity]}
-                </Button>
+                {job?.errorMessage && (
+                  <div className="mt-2 text-[10px] text-destructive line-clamp-2">{job.errorMessage}</div>
+                )}
+
+                <div className="mt-2 flex gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="flex-1 text-xs"
+                    disabled={anyRunning}
+                    onClick={() => runSync([entity])}
+                  >
+                    <Play className="size-3 ml-1" />
+                    سینک دستی
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs"
+                    disabled={anyRunning}
+                    onClick={() => resetJobs(entity)}
+                  >
+                    <RotateCcw className="size-3" />
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           )
@@ -620,8 +669,8 @@ export default function SyncPage() {
                                 {entityLabels[log.entity]}
                               </div>
                               <div>
-                                <Badge variant={log.trigger === "MANUAL" ? "default" : "secondary"}>
-                                  {log.trigger === "MANUAL" ? "دستی" : "خودکار"}
+                                <Badge variant={log.trigger === "MANUAL" ? "default" : log.trigger === "AUTO" ? "secondary" : "outline"}>
+                                  {log.trigger === "MANUAL" ? "دستی" : log.trigger === "AUTO" ? "خودکار" : "کرون"}
                                 </Badge>
                               </div>
                               <div>
@@ -641,9 +690,7 @@ export default function SyncPage() {
                               <div className="text-emerald-600 dark:text-emerald-400">{toPersianNum(log.recordsUpserted)}</div>
                               <div>
                                 {log.recordsFailed > 0 ? (
-                                  <span className="text-destructive font-medium flex items-center gap-1">
-                                    {toPersianNum(log.recordsFailed)}
-                                  </span>
+                                  <span className="text-destructive font-medium">{toPersianNum(log.recordsFailed)}</span>
                                 ) : (
                                   <span className="text-muted-foreground">--</span>
                                 )}
@@ -714,3 +761,5 @@ export default function SyncPage() {
     </div>
   )
 }
+
+

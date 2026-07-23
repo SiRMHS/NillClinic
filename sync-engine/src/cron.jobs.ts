@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { CrmSyncService, type SyncConfig } from "./crm-sync.service.js";
+import type { SyncEntity } from "@jordan/db";
 import { JordanApiClient } from "./jordan-api.client.js";
 import type { EncryptFn } from "./types.js";
 
@@ -37,4 +38,12 @@ export function registerCronJobs(encrypt: EncryptFn): void {
 export async function runManualSync(encrypt: EncryptFn, config?: SyncConfig) {
   const service = syncService ?? initSyncEngine(encrypt);
   return service.syncAll("MANUAL", config);
+}
+
+export async function runAutoSync(
+  encrypt: EncryptFn,
+  opts: { signal?: AbortSignal; entities?: SyncEntity[]; throttleDelayMs?: number; pageSize?: number },
+) {
+  const service = syncService ?? initSyncEngine(encrypt);
+  return service.syncAllAuto(opts);
 }

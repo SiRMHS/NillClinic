@@ -10,6 +10,27 @@ export type CallStatus = "ANSWERED" | "NO_ANSWER" | "BUSY" | "VOICEMAIL" | "WRON
 export type CallOutcome = "SERVICE_ACCEPTED" | "SERVICE_DECLINED" | "CALLBACK_REQUESTED" | "NO_INTEREST"
 export type FollowUpStatus = "PENDING" | "COMPLETED" | "CANCELLED"
 
+export type CampaignStatus = "ACTIVE" | "PAUSED" | "ARCHIVED"
+
+export interface Campaign {
+  id: string
+  name: string
+  slug: string | null
+  source: LeadSource | null
+  status: CampaignStatus
+  budget: number | null
+  startDate: string | null
+  endDate: string | null
+  notes: string | null
+  createdAt: string
+  leadsCount: number
+  newCount: number
+  contactedCount: number
+  convertedCount: number
+  lostCount: number
+  conversionRate: number
+}
+
 export interface Agent {
   id: string
   fullName: string | null
@@ -75,6 +96,8 @@ export interface Lead {
   serviceReceived?: boolean | null
   assignedUserId?: string | null
   assignedUser?: { id: string; fullName: string | null; email: string } | null
+  campaignId?: string | null
+  campaign?: { id: string; name: string; slug: string | null } | null
   interactions: Interaction[]
   calls: LeadCall[]
   followUps: LeadFollowUp[]
@@ -122,6 +145,12 @@ export const callOutcomeConfig: Record<CallOutcome, { label: string; icon: typeo
   SERVICE_DECLINED: { label: "خدمت نپذیرفت", icon: XCircle, color: "text-amber-600" },
   CALLBACK_REQUESTED: { label: "تماس مجدد", icon: RotateCcw, color: "text-blue-600" },
   NO_INTEREST: { label: "تمایلی ندارد", icon: Ban, color: "text-rose-600" },
+}
+
+export const campaignStatusConfig: Record<CampaignStatus, { label: string; className: string }> = {
+  ACTIVE: { label: "فعال", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
+  PAUSED: { label: "متوقف", className: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
+  ARCHIVED: { label: "بایگانی", className: "bg-muted text-muted-foreground" },
 }
 
 export function toPersianNum(num: number | string) {
