@@ -82,6 +82,7 @@ interface Reception {
 }
 
 const genderLabels: Record<number, string> = {
+  20: "مرد",
   1: "مرد",
   21: "زن",
 }

@@ -25,6 +25,7 @@ import {
   RefreshCwIcon, StethoscopeIcon, DatabaseIcon,
   ClipboardListIcon, WebhookIcon, UserCogIcon,
   Activity, HeadphonesIcon, MegaphoneIcon,
+  ContactRoundIcon,
 } from "lucide-react"
 
 import { useAuth } from "@/stores/auth.store"
@@ -67,6 +68,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   ]
 
   const analysisItems: NavItem[] = [
+    ...(hasPermission("analytics") ? [{ title: "CRM", url: "/crm", icon: ContactRoundIcon }] : []),
     ...(hasPermission("analytics") ? [{ title: "تحلیل‌ها", url: "/analytics", icon: BarChart3Icon }] : []),
     ...(hasPermission("analytics") ? [{ title: "تحلیل‌های پزشکی", url: "/analytics/medical", icon: Activity }] : []),
   ]

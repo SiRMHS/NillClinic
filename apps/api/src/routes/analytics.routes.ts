@@ -87,7 +87,7 @@ analyticsRouter.get("/patient-demographics", async (req, res, next) => {
     const jobDist: Record<string, number> = {};
 
     for (const p of patients) {
-      const gender = p.gender === 1 ? "مرد" : p.gender === 21 ? "زن" : "نامشخص";
+      const gender = p.gender === 20 || p.gender === 1 ? "مرد" : p.gender === 21 ? "زن" : "نامشخص";
       genderDist[gender] = (genderDist[gender] ?? 0) + 1;
 
       const age = persianAge(p.birthDate);
@@ -111,6 +111,75 @@ analyticsRouter.get("/patient-demographics", async (req, res, next) => {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 15),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const introductionLabels: Record<number, string> = {
+  132: "اینستاگرام",
+  133: "وب‌سایت",
+  134: "تلویزیون",
+  135: "دوستان و آشنایان",
+  136: "سایر",
+};
+
+analyticsRouter.get("/crm/patients", async (_req, res, next) => {
+  try {
+    const [totalPatients, genders, countries, residentStatuses, introductions, jobs] = await Promise.all([
+      prisma.patient.count(),
+      prisma.patient.groupBy({ by: ["gender"], _count: { _all: true } }),
+      prisma.patient.groupBy({ by: ["residentCountry"], _count: { _all: true } }),
+      prisma.patient.groupBy({ by: ["isResident"], _count: { _all: true } }),
+      prisma.patient.groupBy({ by: ["introduction"], _count: { _all: true } }),
+      prisma.patient.groupBy({ by: ["job"], _count: { _all: true } }),
+    ]);
+
+    const withPercent = (items: Array<{ name: string; count: number }>) => Array.from(
+      items.reduce((totals, item) => {
+        totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
+        return totals;
+      }, new Map<string, number>()),
+      ([name, count]) => ({
+        name,
+        count,
+        percent: totalPatients > 0 ? Math.round((count / totalPatients) * 10_000) / 100 : 0,
+      }),
+    )
+      .sort((a, b) => b.count - a.count);
+
+    const genderLabel = (gender: number | null): string => {
+      if (gender === 20 || gender === 1) return "مرد";
+      if (gender === 21) return "زن";
+      return gender === null ? "ثبت نشده" : `کد ${gender}`;
+    };
+
+    res.json({
+      totalPatients,
+      generatedAt: new Date().toISOString(),
+      genderDistribution: withPercent(genders.map((item) => ({
+        name: genderLabel(item.gender),
+        count: item._count._all,
+      }))),
+      residenceDistribution: withPercent(countries.map((item) => ({
+        name: item.residentCountry?.trim() || "ثبت نشده",
+        count: item._count._all,
+      }))),
+      residentStatusDistribution: withPercent(residentStatuses.map((item) => ({
+        name: item.isResident === true ? "مقیم" : item.isResident === false ? "غیرمقیم" : "ثبت نشده",
+        count: item._count._all,
+      }))),
+      introductionDistribution: withPercent(introductions.map((item) => ({
+        name: item.introduction === null
+          ? "ثبت نشده"
+          : introductionLabels[item.introduction] ?? `کد ${item.introduction}`,
+        count: item._count._all,
+      }))),
+      occupationDistribution: withPercent(jobs.map((item) => ({
+        name: item.job?.trim() || "ثبت نشده",
+        count: item._count._all,
+      }))),
     });
   } catch (e) {
     next(e);

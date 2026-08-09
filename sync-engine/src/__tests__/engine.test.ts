@@ -64,7 +64,7 @@ describe("MappingEngine", () => {
     it("should map valid patient records", () => {
       const result = engine.mapPatients([samplePatientRaw]);
       expect(result.valid).toHaveLength(1);
-      expect(result.invalid).toBe(0);
+      expect(result.invalid).toHaveLength(0);
       expect(result.valid[0]!.externalCode).toBe(119856);
       expect(result.valid[0]!.plaintext.fullName).toBe("حفصه رفیعی");
     });
@@ -72,24 +72,29 @@ describe("MappingEngine", () => {
     it("should reject invalid patient records", () => {
       const result = engine.mapPatients([{ invalid: true }]);
       expect(result.valid).toHaveLength(0);
-      expect(result.invalid).toBe(1);
+      expect(result.invalid).toHaveLength(1);
     });
 
     it("should handle empty array", () => {
       const result = engine.mapPatients([]);
       expect(result.valid).toHaveLength(0);
-      expect(result.invalid).toBe(0);
+      expect(result.invalid).toHaveLength(0);
     });
 
     it("should handle mixed valid/invalid records", () => {
       const result = engine.mapPatients([samplePatientRaw, { bad: true }, samplePatientRaw]);
       expect(result.valid).toHaveLength(2);
-      expect(result.invalid).toBe(1);
+      expect(result.invalid).toHaveLength(1);
     });
 
     it("should treat patientCode 0 as valid (may be placeholder)", () => {
       const result = engine.mapPatients([{ ...samplePatientRaw, patientCode: 0 }]);
       expect(result.valid).toHaveLength(1);
+    });
+
+    it("should preserve Jordan gender code 20 for male patients", () => {
+      const result = engine.mapPatients([{ ...samplePatientRaw, gender: 20 }]);
+      expect(result.valid[0]!.plaintext.gender).toBe(20);
     });
   });
 
@@ -103,7 +108,7 @@ describe("MappingEngine", () => {
     it("should reject invalid service records", () => {
       const result = engine.mapServices([{ bad: true }]);
       expect(result.valid).toHaveLength(0);
-      expect(result.invalid).toBe(1);
+      expect(result.invalid).toHaveLength(1);
     });
   });
 

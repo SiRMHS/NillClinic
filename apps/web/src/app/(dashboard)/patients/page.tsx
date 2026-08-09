@@ -283,7 +283,7 @@ export default function PatientsPage() {
                 onChange={(e) => setGenderFilter(e.target.value === "ALL" ? "ALL" : Number(e.target.value))}
               >
                 <option value="ALL">همه جنسیت‌ها</option>
-                <option value={1}>مرد</option>
+                <option value={20}>مرد</option>
                 <option value={21}>زن</option>
               </select>
             </div>
@@ -351,9 +351,9 @@ export default function PatientsPage() {
                   <TableCell className="hover:underline font-medium">{patient.fullName}</TableCell>
                   <TableCell dir="ltr">{patient.mobile || "---"}</TableCell>
                   <TableCell>
-                    {patient.gender === 1 && <Badge variant="outline">مرد</Badge>}
+                    {(patient.gender === 20 || patient.gender === 1) && <Badge variant="outline">مرد</Badge>}
                     {patient.gender === 21 && <Badge variant="outline">زن</Badge>}
-                    {patient.gender && patient.gender !== 1 && patient.gender !== 21 && <Badge variant="outline">سایر</Badge>}
+                    {patient.gender && patient.gender !== 20 && patient.gender !== 1 && patient.gender !== 21 && <Badge variant="outline">سایر</Badge>}
                     {!patient.gender && "---"}
                   </TableCell>
                   <TableCell>{patient.job || "---"}</TableCell>
