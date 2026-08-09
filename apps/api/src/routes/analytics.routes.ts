@@ -2,6 +2,7 @@ import { Router } from "express";
 import { timeRangeSchema } from "@jordan/shared";
 import { AnalyticsService } from "../services/analytics.service.js";
 import { prisma } from "@jordan/db";
+import { requirePermission } from "../middleware/permission.middleware.js";
 
 export const analyticsRouter = Router();
 const analytics = new AnalyticsService();
@@ -125,7 +126,7 @@ const introductionLabels: Record<number, string> = {
   136: "سایر",
 };
 
-analyticsRouter.get("/crm/patients", async (_req, res, next) => {
+analyticsRouter.get("/crm/patients", requirePermission("crm"), async (_req, res, next) => {
   try {
     const [totalPatients, genders, countries, residentStatuses, introductions, jobs] = await Promise.all([
       prisma.patient.count(),
@@ -155,6 +156,11 @@ analyticsRouter.get("/crm/patients", async (_req, res, next) => {
       return gender === null ? "ثبت نشده" : `کد ${gender}`;
     };
 
+    const occupationLabel = (job: string | null): string => {
+      const value = job?.trim().replace(/\s+/g, " ") || "ثبت نشده";
+      return value === "ازاد" || value === "آزاد" ? "آزاد" : value;
+    };
+
     res.json({
       totalPatients,
       generatedAt: new Date().toISOString(),
@@ -163,7 +169,7 @@ analyticsRouter.get("/crm/patients", async (_req, res, next) => {
         count: item._count._all,
       }))),
       residenceDistribution: withPercent(countries.map((item) => ({
-        name: item.residentCountry?.trim() || "ثبت نشده",
+        name: item.residentCountry?.trim() || "ایران",
         count: item._count._all,
       }))),
       residentStatusDistribution: withPercent(residentStatuses.map((item) => ({
@@ -177,7 +183,7 @@ analyticsRouter.get("/crm/patients", async (_req, res, next) => {
         count: item._count._all,
       }))),
       occupationDistribution: withPercent(jobs.map((item) => ({
-        name: item.job?.trim() || "ثبت نشده",
+        name: occupationLabel(item.job),
         count: item._count._all,
       }))),
     });

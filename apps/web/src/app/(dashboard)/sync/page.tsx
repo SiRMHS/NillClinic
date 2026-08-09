@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback, startTransition } from "react"
+import { useEffect, useState, useCallback, useRef, startTransition } from "react"
 import { apiFetch } from "@/lib/api-client"
 import { useAuth } from "@/stores/auth.store"
 import { Badge } from "@/components/ui/badge"
@@ -40,6 +40,8 @@ import {
   Bug,
   Power,
   RotateCcw,
+  Save,
+  SlidersHorizontal,
 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
@@ -95,6 +97,14 @@ interface ErrorPage {
 }
 
 const ALL_ENTITIES: SyncEntity[] = ["PATIENTS", "SERVICES", "RESERVES", "TREATMENTS", "RECEPTIONS"]
+const AUTO_SPEED_OPTIONS = [
+  { value: 100, label: "خیلی سریع — ۱۰۰ میلی‌ثانیه" },
+  { value: 300, label: "سریع — ۳۰۰ میلی‌ثانیه" },
+  { value: 500, label: "متعادل — ۵۰۰ میلی‌ثانیه" },
+  { value: 1000, label: "آرام — ۱ ثانیه" },
+  { value: 2000, label: "خیلی آرام — ۲ ثانیه" },
+]
+const AUTO_PAGE_SIZE_OPTIONS = [20, 25, 40, 50, 100, 125, 200]
 
 const entityLabels: Record<SyncEntity, string> = {
   PATIENTS: "بیماران",
@@ -151,7 +161,7 @@ function timeAgo(iso: string) {
 }
 
 export default function SyncPage() {
-  const { user, hasPermission } = useAuth()
+  const { hasPermission } = useAuth()
   const [logs, setLogs] = useState<SyncLog[]>([])
   const [loading, setLoading] = useState(true)
   const [autoState, setAutoState] = useState<AutoState | null>(null)
@@ -163,6 +173,11 @@ export default function SyncPage() {
   const [startingSync, setStartingSync] = useState(false)
   const [togglingAuto, setTogglingAuto] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [savingAutoSettings, setSavingAutoSettings] = useState(false)
+  const [autoThrottleDelayMs, setAutoThrottleDelayMs] = useState(500)
+  const [autoPageSize, setAutoPageSize] = useState(50)
+  const [autoSettingsDirty, setAutoSettingsDirty] = useState(false)
+  const autoSettingsDirtyRef = useRef(false)
 
   const [maxPages, setMaxPages] = useState(2)
   const [pageSize, setPageSize] = useState(50)
@@ -191,6 +206,10 @@ export default function SyncPage() {
         setAutoState(auto)
         setLogs(data)
         setLoading(false)
+        if (!autoSettingsDirtyRef.current) {
+          setAutoThrottleDelayMs(auto.throttleDelayMs)
+          setAutoPageSize(auto.pageSize)
+        }
       })
     } catch {
       startTransition(() => setLoading(false))
@@ -213,13 +232,39 @@ export default function SyncPage() {
       if (enabled && !res.isRunning) {
         toast.error("همه بخش‌ها تکمیل شده‌اند — ابتدا وضعیت را ریست کنید")
       } else {
-        toast.success(enabled ? "سینک کامل خودکار روشن شد" : "سینک کامل خودکار خاموش شد")
+        toast.success(enabled ? "سینک کامل خودکار از آخرین نقطه ادامه یافت" : "سینک کامل خودکار مکث شد")
       }
       await refresh()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "خطا در تغییر وضعیت سینک خودکار")
     } finally {
       setTogglingAuto(false)
+    }
+  }
+
+  const saveAutoSettings = async () => {
+    setSavingAutoSettings(true)
+    try {
+      const settings = await apiFetch<{ ok: boolean; throttleDelayMs: number; pageSize: number }>(
+        "/api/sync/auto/settings",
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            throttleDelayMs: autoThrottleDelayMs,
+            pageSize: autoPageSize,
+          }),
+        },
+      )
+      autoSettingsDirtyRef.current = false
+      setAutoSettingsDirty(false)
+      setAutoThrottleDelayMs(settings.throttleDelayMs)
+      setAutoPageSize(settings.pageSize)
+      toast.success("تنظیمات سینک کامل خودکار ذخیره شد")
+      await refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "خطا در ذخیره تنظیمات سینک خودکار")
+    } finally {
+      setSavingAutoSettings(false)
     }
   }
 
@@ -309,21 +354,6 @@ export default function SyncPage() {
     }
   }, [])
 
-  const viewErrorDetail = async (logId: string) => {
-    setShowErrors((prev) => {
-      const next = new Set(prev)
-      if (next.has(logId)) {
-        next.delete(logId)
-      } else {
-        next.add(logId)
-        if (!errorDetails[logId]) {
-          void fetchErrorDetails(logId)
-        }
-      }
-      return next
-    })
-  }
-
   const toggleEntity = (entity: SyncEntity) => {
     setSelectedEntities((prev) => {
       const next = new Set(prev)
@@ -338,13 +368,6 @@ export default function SyncPage() {
   const runningEntities = new Set(
     autoState?.jobStates.filter((j) => j.status === "RUNNING").map((j) => j.entity) ?? [],
   )
-  const lastStatusPerEntity = ALL_ENTITIES.map((entity) => {
-    const last = logs.find((l) => l.entity === entity)
-    return { entity, last }
-  })
-
-  const runningLogs = logs.filter((l) => l.status === "STARTED")
-
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -403,6 +426,62 @@ export default function SyncPage() {
           <p className="text-sm text-muted-foreground">
             وقتی روشن باشد، تمام بخش‌ها چانک‌به‌چانک (هر چانک {autoState ? toPersianNum(autoState.pageSize) : "۵۰"} رکورد با تاخیر {autoState ? toPersianNum(autoState.throttleDelayMs) : "۵۰۰"} میلی‌ثانیه) تا تکمیل کامل سینک می‌شوند — بدون فشار روی سرور شما یا سرور API. وضعیت در دیتابیس ذخیره می‌شود و بعد از ری‌استارت ادامه می‌یابد.
           </p>
+
+          <div className="rounded-xl border bg-muted/20 p-4">
+            <div className="mb-4 flex items-center gap-2">
+              <SlidersHorizontal className="size-4 text-primary" />
+              <div>
+                <h3 className="text-sm font-semibold">تنظیمات سینک کامل خودکار</h3>
+                <p className="text-xs text-muted-foreground">برای تغییر تنظیمات، سینک را ابتدا مکث کنید.</p>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+              <div className="space-y-2">
+                <Label htmlFor="auto-sync-speed">سرعت دریافت صفحات</Label>
+                <select
+                  id="auto-sync-speed"
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  value={autoThrottleDelayMs}
+                  disabled={autoRunning || savingAutoSettings}
+                  onChange={(event) => {
+                    autoSettingsDirtyRef.current = true
+                    setAutoSettingsDirty(true)
+                    setAutoThrottleDelayMs(Number(event.target.value))
+                  }}
+                >
+                  {AUTO_SPEED_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="auto-page-size">تعداد رکورد در هر درخواست</Label>
+                <select
+                  id="auto-page-size"
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  value={autoPageSize}
+                  disabled={autoRunning || savingAutoSettings}
+                  onChange={(event) => {
+                    autoSettingsDirtyRef.current = true
+                    setAutoSettingsDirty(true)
+                    setAutoPageSize(Number(event.target.value))
+                  }}
+                >
+                  {AUTO_PAGE_SIZE_OPTIONS.map((value) => (
+                    <option key={value} value={value}>{toPersianNum(value)} رکورد</option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                type="button"
+                onClick={saveAutoSettings}
+                disabled={autoRunning || savingAutoSettings || !autoSettingsDirty}
+              >
+                {savingAutoSettings ? <Loader2 className="animate-spin" /> : <Save />}
+                ذخیره تنظیمات
+              </Button>
+            </div>
+          </div>
 
           {autoRunning && (
             <div className="flex items-center gap-2 text-sm">
@@ -761,5 +840,3 @@ export default function SyncPage() {
     </div>
   )
 }
-
-

@@ -58,6 +58,21 @@ export async function setAutoSyncEnabled(enabled: boolean) {
   });
 }
 
+export async function updateSyncSettings(input: { throttleDelayMs: number; pageSize: number }) {
+  return prisma.syncSettings.upsert({
+    where: { id: 1 },
+    create: {
+      id: 1,
+      throttleDelayMs: input.throttleDelayMs,
+      pageSize: input.pageSize,
+    },
+    update: {
+      throttleDelayMs: input.throttleDelayMs,
+      pageSize: input.pageSize,
+    },
+  });
+}
+
 export async function getAllJobStates() {
   const existing = await prisma.syncJobState.findMany();
   const map = new Map(existing.map((j) => [j.entity, j]));

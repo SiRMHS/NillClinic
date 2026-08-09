@@ -22,7 +22,7 @@ async function main() {
       name: "admin",
       label: "مدیر کلینیک",
       description: "مدیریت کاربران و مشاهده همه بخش‌ها",
-      permissions: ["dashboard", "patients", "patients.view", "leads", "analytics", "sync", "settings"],
+      permissions: ["dashboard", "patients", "patients.view", "leads", "crm", "analytics", "sync", "settings"],
     },
   });
 
@@ -33,7 +33,7 @@ async function main() {
       name: "analyst",
       label: "تحلیلگر",
       description: "مشاهده گزارش‌ها و تحلیل‌ها",
-      permissions: ["dashboard", "patients.view", "analytics"],
+      permissions: ["dashboard", "patients.view", "crm", "analytics"],
     },
   });
 

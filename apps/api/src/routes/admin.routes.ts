@@ -260,6 +260,7 @@ export const AVAILABLE_PERMISSIONS = [
   { key: "patients", label: "بیماران (مدیریت)", group: "بیماران" },
   { key: "patients.view", label: "بیماران (مشاهده)", group: "بیماران" },
   { key: "leads", label: "لیدها", group: "فروش" },
+  { key: "crm", label: "CRM (تحلیل مراجعین)", group: "گزارشات" },
   { key: "analytics", label: "تحلیل‌ها", group: "گزارشات" },
   { key: "settings", label: "تنظیمات", group: "سیستم" },
   { key: "settings.users", label: "مدیریت کاربران", group: "سیستم" },

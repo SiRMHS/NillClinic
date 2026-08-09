@@ -11,6 +11,7 @@ import {
   getAllJobStates,
   getSyncSettings,
   setAutoSyncEnabled,
+  updateSyncSettings,
   resetJobState,
   resetAllJobStates,
 } from "../services/sync-state.service.js";
@@ -31,6 +32,11 @@ const syncConfigSchema = z.object({
   entities: z
     .array(z.nativeEnum(SyncEntity))
     .optional(),
+});
+
+const autoSettingsSchema = z.object({
+  throttleDelayMs: z.coerce.number().int().min(0).max(30_000),
+  pageSize: z.coerce.number().int().min(1).max(200),
 });
 
 let currentAbortController: AbortController | null = null;
@@ -114,8 +120,6 @@ syncRouter.get("/auto", async (_req, res, next) => {
 syncRouter.post("/auto", async (req, res, next) => {
   try {
     const body = z.object({ enabled: z.boolean() }).parse(req.body);
-    const settings = await getSyncSettings();
-
     if (body.enabled) {
       await setAutoSyncEnabled(true);
       const result = await startAutoSync();
@@ -143,6 +147,25 @@ syncRouter.post("/auto", async (req, res, next) => {
 
     const updated = await getSyncSettings();
     res.json({ ok: true, autoSyncEnabled: updated.autoSyncEnabled, isRunning: isAutoSyncRunning() });
+  } catch (e) {
+    next(e);
+  }
+});
+
+syncRouter.patch("/auto/settings", async (req, res, next) => {
+  try {
+    if (isAutoSyncRunning()) {
+      res.status(409).json({ error: "برای تغییر تنظیمات ابتدا سینک خودکار را مکث کنید" });
+      return;
+    }
+
+    const input = autoSettingsSchema.parse(req.body);
+    const settings = await updateSyncSettings(input);
+    res.json({
+      ok: true,
+      throttleDelayMs: settings.throttleDelayMs,
+      pageSize: settings.pageSize,
+    });
   } catch (e) {
     next(e);
   }
