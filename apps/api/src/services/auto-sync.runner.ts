@@ -1,4 +1,5 @@
 import { runAutoSync, ALL_SYNC_ENTITIES } from "@jordan/sync-engine";
+import { PatientRankingService } from "./patient-ranking.service.js";
 import type { SyncEntity } from "@jordan/db";
 import { prisma } from "@jordan/db";
 import { createEncryptFn } from "../security/encryption.js";
@@ -63,6 +64,23 @@ export async function startAutoSync(opts?: { entities?: SyncEntity[]; resume?: b
         const pending = await pendingEntities();
         if (pending.length > 0) {
           void startAutoSync({ resume: true });
+          return;
+        }
+      }
+
+      // Nothing left to sync: refresh RFM scores and value tiers. Both are
+      // stored rather than derived per request — the monetary score is a
+      // population quintile and the tier is a lifetime-spend total, so each
+      // shifts whenever reception data changes. Failure here must not fail the
+      // sync itself.
+      if (!controller.signal.aborted) {
+        try {
+          const result = await new PatientRankingService().recompute();
+          // eslint-disable-next-line no-console
+          console.log(`[auto-sync] RFM + tiers recomputed for ${result.patients} patients in ${result.durationMs}ms`);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error("[auto-sync] RFM recompute failed:", err);
         }
       }
     });

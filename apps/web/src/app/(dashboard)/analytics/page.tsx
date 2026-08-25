@@ -1,685 +1,536 @@
 "use client"
 
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { apiFetch } from "@/lib/api-client"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { formatCount, formatPercent, formatRial, formatRialExact, toPersianNum, formatJalaliPeriod } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Award, BarChart3, FileSpreadsheet, FileText, Users, PieChart, Layers,
-  Activity, Pill, Syringe, Stethoscope, TrendingUp,
-} from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useRouter } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { SortableHead, useSortableRows } from "@/components/ui/sortable-table"
+import Link from "next/link"
 import {
-  Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale,
-  BarElement, PointElement, LineElement, Filler,
-} from "chart.js"
-import type { ChartOptions } from "chart.js"
-import { Doughnut, Bar, Line } from "react-chartjs-2"
+  AlertTriangle, CalendarCheck, Megaphone, RefreshCw, TrendingUp, Users, Info,
+} from "lucide-react"
 
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Filler)
-
-interface PopularityData { name: string; count: number }
-interface DoctorPerformance { doctorName: string; reserveCount: number; treatmentCount: number }
-interface Demographics {
-  genderDistribution: { name: string; count: number }[]
-  ageDistribution: { name: string; count: number }[]
-  jobDistribution: { name: string; count: number }[]
+interface AcquisitionChannel {
+  introductionId: number | null
+  channel: string
+  patients: number
+  payingPatients: number
+  activationRate: number
+  revenue: number
+  revenuePerPatient: number
+  revenuePerPayingPatient: number
+}
+interface DemographicValue {
+  bucket: string
+  patients: number
+  payingPatients: number
+  revenue: number
+  averageSpend: number
+  revenueShare: number
+}
+interface AcquisitionCohort {
+  cohort: string
+  newPatients: number
+  returnedPatients: number
+  returnRate: number
+  revenue: number
+  revenuePerPatient: number
+}
+interface BookingFollowThrough {
+  totalReserves: number
+  acceptedReserves: number
+  acceptanceRate: number
+  matchedReserves: number
+  matchableReserves: number
+  followThroughRate: number
+  unidentifiedReserves: number
+}
+interface PlanCoverage {
+  plans: number
+  planPatients: number
+  billedPatients: number
+  coverageRate: number
+  oldestPlanDate: string | null
+  newestPlanDate: string | null
+}
+interface MedicalMatrix {
+  diagnoses: string[]
+  treatments: string[]
+  diagnosisDetails: { diagnosis: string; total: number; treatments: { name: string; count: number }[] }[]
+  treatmentDetails: { treatment: string; total: number; diagnoses: { diagnosis: string; count: number }[] }[]
+}
+interface Coverage {
+  syncComplete: boolean
+  oldestReceptionDate: string | null
+  newestReceptionDate: string | null
+  syncCursorDate: string | null
+  receptionCount: number
 }
 
-interface TreatmentCategory { name: string; count: number }
-interface DiagnosisItem { name: string; count: number }
-interface TreatmentItem { name: string; count: number }
-interface MonthlyTrend { period: string; [key: string]: string | number }
-interface DoctorBreakdown {
-  doctor: string
-  categories: { name: string; count: number }[]
-  total: number
-}
-
-interface TreatmentAnalytics {
-  categories: TreatmentCategory[]
-  diagnoses: DiagnosisItem[]
-  treatmentItems: TreatmentItem[]
-  monthlyTrend: MonthlyTrend[]
-  doctorBreakdown: DoctorBreakdown[]
-}
-
-const COLORS = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316", "#6366f1", "#14b8a6"]
-
-function toPersianNum(num: number | string) {
-  return num.toString().replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[parseInt(d, 10)]!)
-}
-
-const treatmentCatIcons: Record<string, React.ReactNode> = {
-  "درمان دارویی": <Pill className="size-4" />,
-  "پروسیجر": <Syringe className="size-4" />,
-  "تشخیص": <Stethoscope className="size-4" />,
-}
-
-function getCatIcon(name: string): React.ReactNode {
-  for (const [key, icon] of Object.entries(treatmentCatIcons)) {
-    if (name.includes(key)) return icon
-  }
-  return <Activity className="size-4" />
-}
-
-const font = { family: "system-ui, sans-serif" }
-
-function chartTextConfig(size = 11) {
-  return { ...font, size }
-}
-
-const commonOpts = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: { labels: { ...font, boxWidth: 12, padding: 12 } },
-    tooltip: { bodyFont: font, titleFont: font },
-  },
-} satisfies ChartOptions
-
-const monthNames: Record<string, string> = {
-  "01": "فروردین", "02": "اردیبهشت", "03": "خرداد",
-  "04": "تیر", "05": "مرداد", "06": "شهریور",
-  "07": "مهر", "08": "آبان", "09": "آذر",
-  "10": "دی", "11": "بهمن", "12": "اسفند",
-}
-
-function formatMonth(period: string): string {
-  const parts = period.split("-")
-  if (parts.length !== 2) return period
-  return `${monthNames[parts[1]] || parts[1]} ${parts[0]}`
-}
-
-function ChartWrapper({ children }: { children: React.ReactNode }) {
-  const mounted = useSyncExternalStore(
-    () => () => {},
-    () => true,
-    () => false,
+function Stat({
+  label, value, hint, icon, tone,
+}: {
+  label: string
+  value: string
+  hint?: string
+  icon?: React.ReactNode
+  tone?: "positive" | "warning" | "danger"
+}) {
+  const toneClass =
+    tone === "positive" ? "text-emerald-600 dark:text-emerald-400"
+    : tone === "warning" ? "text-amber-600 dark:text-amber-400"
+    : tone === "danger" ? "text-rose-600 dark:text-rose-400"
+    : ""
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+        <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+        {icon ? <span className="text-muted-foreground">{icon}</span> : null}
+      </CardHeader>
+      <CardContent>
+        <div className={`text-2xl font-bold tabular-nums ${toneClass}`}>{value}</div>
+        {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
+      </CardContent>
+    </Card>
   )
-  if (!mounted) return <div className="h-full w-full flex items-center justify-center"><Skeleton className="h-full w-full" /></div>
-  return <>{children}</>
+}
+
+function RateBar({ value, tone = "emerald" }: { value: number; tone?: "emerald" | "amber" }) {
+  const pct = Math.max(0, Math.min(1, value)) * 100
+  return (
+    // inline-flex, not flex: a block-level flex box positions itself and
+    // ignores the cell's text alignment, so the bar drifted out from under its
+    // header (which is an inline-flex button obeying the same `text-left`).
+    <span className="inline-flex items-center gap-2 align-middle">
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+        <span className={`block h-full ${tone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${pct}%` }} />
+      </span>
+      <span className="w-11 text-left tabular-nums">{formatPercent(value, 0)}</span>
+    </span>
+  )
 }
 
 export default function AnalyticsPage() {
-  const router = useRouter()
-
-  useEffect(() => {
-    const resolved = getComputedStyle(document.documentElement).fontFamily
-    if (resolved) ChartJS.defaults.font.family = resolved
-  }, [])
-  const [popularityData, setPopularityData] = useState<PopularityData[]>([])
-  const [doctorData, setDoctorData] = useState<DoctorPerformance[]>([])
-  const [demographics, setDemographics] = useState<Demographics | null>(null)
-  const [treatmentData, setTreatmentData] = useState<TreatmentAnalytics | null>(null)
+  const [channels, setChannels] = useState<AcquisitionChannel[]>([])
+  const [demo, setDemo] = useState<{ gender: DemographicValue[]; age: DemographicValue[] } | null>(null)
+  const [cohorts, setCohorts] = useState<AcquisitionCohort[]>([])
+  const [booking, setBooking] = useState<BookingFollowThrough | null>(null)
+  const [planCoverage, setPlanCoverage] = useState<PlanCoverage | null>(null)
+  const [coverage, setCoverage] = useState<Coverage | null>(null)
+  const [matrix, setMatrix] = useState<MedicalMatrix | null>(null)
   const [loading, setLoading] = useState(true)
-  const [treatLoading, setTreatLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState("overview")
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let active = true
-    const fetchAnalytics = async () => {
-      setLoading(true)
-      try {
-        const [popularity, doctors, demo] = await Promise.all([
-          apiFetch<PopularityData[]>("/api/analytics/treatment-popularity"),
-          apiFetch<DoctorPerformance[]>("/api/analytics/doctor-performance"),
-          apiFetch<Demographics>("/api/analytics/patient-demographics"),
-        ])
-        if (active) {
-          setPopularityData(popularity)
-          setDoctorData(doctors)
-          setDemographics(demo)
-        }
-      } catch {
-        if (active) {
-          setPopularityData([
-            { name: "لیزر موهای زائد", count: 145 },
-            { name: "بوتاکس مصپورت", count: 98 },
-            { name: "جوانسازی با هایفو", count: 72 },
-            { name: "تزریق ژل لب", count: 64 },
-            { name: "پاکسازی پوست", count: 53 },
-          ])
-          setDoctorData([
-            { doctorName: "دکتر نیلوفر جردن", reserveCount: 120, treatmentCount: 95 },
-            { doctorName: "دکتر سهرابی", reserveCount: 85, treatmentCount: 78 },
-            { doctorName: "اپراتور لیزر ۱", reserveCount: 140, treatmentCount: 40 },
-            { doctorName: "اپراتور فیشیال ۲", reserveCount: 90, treatmentCount: 30 },
-          ])
-          setDemographics({
-            genderDistribution: [{ name: "مرد", count: 45 }, { name: "زن", count: 120 }, { name: "نامشخص", count: 12 }],
-            ageDistribution: [{ name: "زیر ۱۸", count: 8 }, { name: "۱۸-۲۹", count: 52 }, { name: "۳۰-۴۴", count: 68 }, { name: "۴۵-۵۹", count: 35 }, { name: "۶۰+", count: 14 }],
-            jobDistribution: [{ name: "خانه‌دار", count: 48 }, { name: "کارمند", count: 35 }, { name: "آزاد", count: 28 }, { name: "دانشجو", count: 22 }, { name: "بازنشسته", count: 12 }],
-          })
-        }
-      } finally {
-        if (active) setLoading(false)
-      }
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [ch, dm, co, bk, pc, cov, mx] = await Promise.all([
+        apiFetch<AcquisitionChannel[]>("/api/analytics/acquisition-channels"),
+        apiFetch<{ gender: DemographicValue[]; age: DemographicValue[] }>("/api/analytics/demographic-value"),
+        apiFetch<AcquisitionCohort[]>("/api/analytics/cohorts?limit=24"),
+        apiFetch<BookingFollowThrough>("/api/analytics/booking-follow-through"),
+        apiFetch<PlanCoverage>("/api/analytics/treatment-plan-coverage"),
+        apiFetch<Coverage>("/api/visitors/coverage"),
+        apiFetch<MedicalMatrix>("/api/analytics/medical-matrix"),
+      ])
+      setChannels(ch)
+      setDemo(dm)
+      setCohorts(co)
+      setBooking(bk)
+      setPlanCoverage(pc)
+      setCoverage(cov)
+      setMatrix(mx)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "خطا در دریافت تحلیل‌ها")
+    } finally {
+      setLoading(false)
     }
-    fetchAnalytics()
-    return () => { active = false }
   }, [])
 
   useEffect(() => {
-    let active = true
-    const fetchTreatments = async () => {
-      setTreatLoading(true)
-      try {
-        const data = await apiFetch<TreatmentAnalytics>("/api/analytics/treatments")
-        if (active) setTreatmentData(data)
-      } catch {
-        if (active) {
-          setTreatmentData({
-            categories: [
-              { name: "درمان دارویی داروهای مو و ابرو", count: 187 },
-              { name: "پروسیجر مو", count: 143 },
-              { name: "تشخیص بیماری‌های مو و ابرو", count: 98 },
-              { name: "پروسیجر صورت", count: 76 },
-              { name: "مراقبت پوست", count: 54 },
-            ],
-            diagnoses: [
-              { name: "Androgenetic alopecia", count: 156 },
-              { name: "Telogen effluvium", count: 67 },
-              { name: "Alopecia areata", count: 43 },
-              { name: "Female pattern hair loss", count: 38 },
-              { name: "Male pattern baldness", count: 32 },
-            ],
-            treatmentItems: [
-              { name: "Oral Minoxidil (0.25–2.5 mg)", count: 134 },
-              { name: "PRF (Platelet-Rich Fibrin)", count: 112 },
-              { name: "Minoxidil topical 5%", count: 98 },
-              { name: "Dutasteride 0.5 mg", count: 76 },
-              { name: "Folicogen", count: 65 },
-              { name: "Minoxidil topical 2%", count: 54 },
-              { name: "PRP (Platelet-Rich Plasma)", count: 48 },
-              { name: "Microneedling", count: 42 },
-            ],
-            monthlyTrend: [
-              { period: "2025-10", "درمان دارویی داروهای مو و ابرو": 12, "پروسیجر مو": 8 },
-              { period: "2025-11", "درمان دارویی داروهای مو و ابرو": 15, "پروسیجر مو": 10 },
-              { period: "2025-12", "درمان دارویی داروهای مو و ابرو": 18, "پروسیجر مو": 14 },
-              { period: "2026-01", "درمان دارویی داروهای مو و ابرو": 22, "پروسیجر مو": 16 },
-              { period: "2026-02", "درمان دارویی داروهای مو و ابرو": 25, "پروسیجر مو": 18 },
-              { period: "2026-03", "درمان دارویی داروهای مو و ابرو": 28, "پروسیجر مو": 22 },
-            ],
-            doctorBreakdown: [
-              { doctor: "دکتر نیلوفر جردن", categories: [{ name: "درمان دارویی", count: 45 }, { name: "پروسیجر", count: 38 }, { name: "تشخیص", count: 22 }], total: 105 },
-              { doctor: "دکتر سهرابی", categories: [{ name: "درمان دارویی", count: 32 }, { name: "پروسیجر", count: 28 }, { name: "تشخیص", count: 18 }], total: 78 },
-            ],
-          })
-        }
-      } finally {
-        if (active) setTreatLoading(false)
-      }
-    }
-    fetchTreatments()
-    return () => { active = false }
-  }, [])
+    void load()
+  }, [load])
 
-  const handleExport = (type: "pdf" | "excel") => {
-    alert(`خروجی گزارش به فرمت ${type === "pdf" ? "PDF" : "Excel"} با موفقیت آماده شد`)
-  }
+  const chSort = useSortableRows(
+    channels,
+    {
+      channel: (r) => r.channel,
+      patients: (r) => r.patients,
+      paying: (r) => r.payingPatients,
+      activation: (r) => r.activationRate,
+      revenue: (r) => r.revenue,
+      perPatient: (r) => r.revenuePerPatient,
+    },
+    { key: "revenue", direction: "desc" },
+  )
 
-  const allCategories = treatmentData?.categories ?? []
-  const trendKeys = allCategories.map((c) => c.name)
-
-  const genderData = {
-    labels: demographics?.genderDistribution.map((g) => g.name) ?? [],
-    datasets: [{
-      data: demographics?.genderDistribution.map((g) => g.count) ?? [],
-      backgroundColor: COLORS.slice(0, 3),
-      borderWidth: 0,
-    }],
-  }
-
-  const ageData = {
-    labels: demographics?.ageDistribution.map((a) => a.name) ?? [],
-    datasets: [{
-      label: "تعداد",
-      data: demographics?.ageDistribution.map((a) => a.count) ?? [],
-      backgroundColor: "#2563eb",
-      borderRadius: 4,
-    }],
-  }
-
-  const jobData = {
-    labels: demographics?.jobDistribution.map((j) => j.name).reverse() ?? [],
-    datasets: [{
-      label: "تعداد",
-      data: demographics?.jobDistribution.map((j) => j.count).reverse() ?? [],
-      backgroundColor: "#d97706",
-      borderRadius: 4,
-    }],
-  }
-
-  const catPieData = {
-    labels: treatmentData?.categories.map((c) => c.name) ?? [],
-    datasets: [{
-      data: treatmentData?.categories.map((c) => c.count) ?? [],
-      backgroundColor: COLORS,
-      borderWidth: 0,
-    }],
-  }
-
-  const catBarData = {
-    labels: treatmentData?.categories.map((c) => c.name).reverse() ?? [],
-    datasets: [{
-      label: "تعداد پرونده",
-      data: treatmentData?.categories.map((c) => c.count).reverse() ?? [],
-      backgroundColor: "#8b5cf6",
-      borderRadius: 4,
-    }],
-  }
-
-  const trendData = {
-    labels: treatmentData?.monthlyTrend.map((m) => formatMonth(m.period)) ?? [],
-    datasets: trendKeys.slice(0, 6).map((key, i) => ({
-      label: key,
-      data: treatmentData?.monthlyTrend.map((m) => (m[key] as number) ?? 0) ?? [],
-      borderColor: COLORS[i % COLORS.length],
-      backgroundColor: COLORS[i % COLORS.length] + "20",
-      fill: true,
-      tension: 0.3,
-      pointRadius: 3,
-    })),
-  }
-
-  const popData = {
-    labels: popularityData.map((p) => p.name).reverse(),
-    datasets: [{
-      label: "تعداد پرونده",
-      data: popularityData.map((p) => p.count).reverse(),
-      backgroundColor: COLORS,
-      borderRadius: 4,
-    }],
-  }
-
-  if (loading) {
-    return (
-      <div className="flex flex-col gap-6">
-        <div className="grid gap-6 md:grid-cols-2">
-          {[1, 2].map((i) => (
-            <Card key={i}><CardHeader><Skeleton className="h-5 w-48" /></CardHeader><CardContent><Skeleton className="h-64 w-full" /></CardContent></Card>
-          ))}
-        </div>
-      </div>
-    )
-  }
+  const best = channels.filter((c) => c.introductionId !== null && c.patients >= 500)
+  const bestChannel = [...best].sort((a, b) => b.revenuePerPatient - a.revenuePerPatient)[0]
+  const worstChannel = [...best].sort((a, b) => a.activationRate - b.activationRate)[0]
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="flex flex-col gap-4 p-4 md:p-6" dir="rtl">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">گزارشات و تحلیل‌ها</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            ارزیابی راندمان پزشکان و بررسی روندهای درمانی
+          <h1 className="text-2xl font-bold">تحلیل‌ها</h1>
+          <p className="text-sm text-muted-foreground">
+            هر گروه از مراجعین چقدر می‌ارزد — کانال جذب، جمعیت‌شناسی، کوهورت و پیگیری نوبت
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={() => handleExport("excel")}>
-            <FileSpreadsheet className="text-emerald-600" />
-            خروجی Excel
-          </Button>
-          <Button size="sm" onClick={() => handleExport("pdf")}>
-            <FileText />
-            دانلود PDF
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+          <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
+          بازخوانی
+        </Button>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v: string | null) => v && setActiveTab(v)}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="overview" className="flex items-center gap-2">
-            <BarChart3 className="size-4" />
-            نمای کلی
-          </TabsTrigger>
-          <TabsTrigger value="treatments" className="flex items-center gap-2">
-            <Activity className="size-4" />
-            تحلیل درمان
-          </TabsTrigger>
-          <TabsTrigger value="doctors" className="flex items-center gap-2">
-            <Users className="size-4" />
-            عملکرد پرسنل
-          </TabsTrigger>
-        </TabsList>
+      {error ? (
+        <Card>
+          <CardContent className="py-6 text-center text-sm text-rose-600 dark:text-rose-400">{error}</CardContent>
+        </Card>
+      ) : null}
 
-        {/* ─── Overview Tab ─── */}
-        <TabsContent value="overview" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-3">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <PieChart className="text-blue-600" />
-                  توزیع جنسیت
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-52">
-                  <ChartWrapper>
-                    <Doughnut data={genderData} options={{ ...commonOpts, cutout: "55%" }} />
-                  </ChartWrapper>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Layers className="text-emerald-600" />
-                  توزیع سنی
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-52">
-                  <ChartWrapper>
-                    <Bar data={ageData} options={{ ...commonOpts, scales: { y: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, x: { ticks: { font: chartTextConfig(10) } } } }} />
-                  </ChartWrapper>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <BarChart3 className="text-amber-600" />
-                  شغل بیماران
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-52">
-                  <ChartWrapper>
-                    <Bar data={jobData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { font: chartTextConfig(10) } } } }} />
-                  </ChartWrapper>
-                </div>
-              </CardContent>
-            </Card>
+      {coverage && !coverage.syncComplete ? (
+        <Card className="border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40">
+          <CardContent className="flex items-start gap-3 py-3 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <span className="font-medium">سینک پذیرش‌ها کامل نشده</span> — ارقام مالی و کوهورت‌ها
+              فقط بازه سینک‌شده را پوشش می‌دهند.
+              <div className="mt-1 text-xs text-muted-foreground">
+                {coverage.oldestReceptionDate ? toPersianNum(coverage.oldestReceptionDate) : "—"} تا{" "}
+                {coverage.newestReceptionDate ? toPersianNum(coverage.newestReceptionDate) : "—"} ·{" "}
+                {formatCount(coverage.receptionCount)} پذیرش
+                {coverage.syncCursorDate ? ` · سینک تا ${toPersianNum(coverage.syncCursorDate)}` : ""}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {loading && channels.length === 0 ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28 w-full" />)}
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat
+              label="پربازده‌ترین کانال"
+              value={bestChannel?.channel ?? "—"}
+              hint={bestChannel ? `${formatRial(bestChannel.revenuePerPatient)} درآمد به ازای هر جذب` : undefined}
+              icon={<Megaphone className="size-4" />}
+              tone="positive"
+            />
+            <Stat
+              label="ضعیف‌ترین تبدیل کانال"
+              value={worstChannel?.channel ?? "—"}
+              hint={worstChannel ? `فقط ${formatPercent(worstChannel.activationRate, 0)} به بیمار پرداخت‌کننده تبدیل شده` : undefined}
+              icon={<Megaphone className="size-4" />}
+              tone="warning"
+            />
+            <Stat
+              label="پیگیری نوبت"
+              value={booking ? formatPercent(booking.followThroughRate, 0) : "—"}
+              hint={booking ? `${formatCount(booking.matchedReserves)} از ${formatCount(booking.matchableReserves)} نوبت گذشته به پذیرش رسید` : undefined}
+              icon={<CalendarCheck className="size-4" />}
+              tone={booking && booking.followThroughRate < 0.5 ? "warning" : undefined}
+            />
+            <Stat
+              label="نوبت بدون کد بیمار"
+              value={booking ? formatCount(booking.unidentifiedReserves) : "—"}
+              hint={booking ? `${formatPercent(booking.totalReserves > 0 ? booking.unidentifiedReserves / booking.totalReserves : 0, 0)} از نوبت‌ها قابل انتساب نیستند` : undefined}
+              icon={<Users className="size-4" />}
+              tone="danger"
+            />
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Award className="text-amber-600 dark:text-amber-400" />
-                محبوبیت خدمات درمانی
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-64">
-                <ChartWrapper>
-                  <Bar data={popData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { font: chartTextConfig(10) } } }, plugins: { legend: { display: false }, tooltip: commonOpts.plugins.tooltip } } as ChartOptions<"bar">} />
-                </ChartWrapper>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+          <Tabs defaultValue="channels">
+            <TabsList>
+              <TabsTrigger value="channels">کانال جذب</TabsTrigger>
+              <TabsTrigger value="demographics">ارزش مراجعین</TabsTrigger>
+              <TabsTrigger value="cohorts">کوهورت و بازگشت</TabsTrigger>
+              <TabsTrigger value="booking">پیگیری نوبت</TabsTrigger>
+              <TabsTrigger value="clinical">بالینی</TabsTrigger>
+            </TabsList>
 
-        {/* ─── Treatments Tab ─── */}
-        <TabsContent value="treatments" className="space-y-6">
-          {treatLoading ? (
-            <div className="grid gap-6 md:grid-cols-2">
-              {[1, 2, 3, 4].map((i) => (
-                <Card key={i}><CardHeader><Skeleton className="h-5 w-48" /></CardHeader><CardContent><Skeleton className="h-48 w-full" /></CardContent></Card>
-              ))}
-            </div>
-          ) : (
-            <>
-              <div className="grid gap-6 md:grid-cols-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <PieChart className="text-violet-600" />
-                      دسته‌بندی درمان‌ها
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="h-72">
-                      <ChartWrapper>
-                        <Doughnut data={catPieData} options={{ ...commonOpts, cutout: "50%", plugins: { ...commonOpts.plugins, legend: { ...commonOpts.plugins.legend, position: "bottom" as const } } }} />
-                      </ChartWrapper>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <BarChart3 className="text-violet-600" />
-                      تفکیک دسته‌بندی درمان
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="h-72">
-                      <ChartWrapper>
-                        <Bar data={catBarData} options={{ ...commonOpts, indexAxis: "y", scales: { x: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, y: { ticks: { font: chartTextConfig(9) } } }, plugins: { legend: { display: false }, tooltip: commonOpts.plugins.tooltip } } as ChartOptions<"bar">} />
-                      </ChartWrapper>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
+            <TabsContent value="channels">
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Stethoscope className="text-blue-600" />
-                    تشخیص‌های ثبت شده
-                  </CardTitle>
+                  <CardTitle className="text-base">بازدهی کانال‌های جذب</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    «تعداد بیمار» و «درآمد» یک چیز نیستند: کانالی می‌تواند بیشترین مراجع را بیاورد و
+                    کمترین بازده را داشته باشد. ستون «درآمد هر جذب» ملاک تصمیم است.
+                  </p>
                 </CardHeader>
                 <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>عنوان تشخیص</TableHead>
-                        <TableHead>تعداد</TableHead>
-                        <TableHead>درصد</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {treatmentData?.diagnoses.map((d, i) => {
-                        const total = treatmentData.diagnoses.reduce((s, x) => s + x.count, 0)
-                        const pct = total > 0 ? Math.round((d.count / total) * 100) : 0
-                        return (
-                          <TableRow key={d.name}>
-                            <TableCell className="font-medium">{toPersianNum(i + 1)}. {d.name}</TableCell>
-                            <TableCell>{toPersianNum(d.count)}</TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
-                                <div className="h-2 rounded-full bg-blue-100 dark:bg-blue-950 flex-1 max-w-[200px]">
-                                  <div className="h-full rounded-full bg-blue-600" style={{ width: `${pct}%` }} />
-                                </div>
-                                <span className="text-xs text-muted-foreground">%{toPersianNum(pct)}</span>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Activity className="text-emerald-600" />
-                    آیتم‌های درمانی پرکاربرد
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>نام درمان</TableHead>
-                        <TableHead>تعداد تجویز</TableHead>
-                        <TableHead>محبوبیت</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {treatmentData?.treatmentItems.map((item, i) => {
-                        const max = treatmentData.treatmentItems[0]?.count || 1
-                        const pct = Math.round((item.count / max) * 100)
-                        const barColor = pct > 75 ? "bg-emerald-500" : pct > 50 ? "bg-blue-500" : pct > 25 ? "bg-amber-500" : "bg-gray-400"
-                        return (
-                          <TableRow key={item.name}>
-                            <TableCell className="font-medium">{toPersianNum(i + 1)}. {item.name}</TableCell>
-                            <TableCell>{toPersianNum(item.count)}</TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
-                                <div className="h-2.5 rounded-full bg-gray-100 dark:bg-gray-800 flex-1 max-w-[250px]">
-                                  <div className={`h-full rounded-full ${barColor} transition-all`} style={{ width: `${pct}%` }} />
-                                </div>
-                                <span className="text-xs text-muted-foreground min-w-[40px]">%{toPersianNum(pct)}</span>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-
-              {treatmentData && trendKeys.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <TrendingUp className="text-blue-600" />
-                      روند ماهانه درمان‌ها
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="h-72">
-                      <ChartWrapper>
-                        <Line data={trendData} options={{ ...commonOpts, scales: { y: { ticks: { font: chartTextConfig(10) }, beginAtZero: true }, x: { ticks: { font: chartTextConfig(10) } } } }} />
-                      </ChartWrapper>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {treatmentData && treatmentData.doctorBreakdown.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <Users className="text-amber-600" />
-                      تفکیک درمان بر اساس پزشک
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-0">
+                  <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>پزشک</TableHead>
-                          <TableHead>دسته‌بندی</TableHead>
-                          <TableHead>تعداد</TableHead>
-                          <TableHead className="text-center">مجموع</TableHead>
+                          <SortableHead label="کانال" sortKey="channel" sort={chSort.sort} onSort={chSort.toggle} defaultDirection="asc" />
+                          <SortableHead label="بیمار جذب‌شده" sortKey="patients" sort={chSort.sort} onSort={chSort.toggle} align="left" />
+                          <SortableHead label="پرداخت‌کننده" sortKey="paying" sort={chSort.sort} onSort={chSort.toggle} align="left" />
+                          <SortableHead label="نرخ فعال‌سازی" sortKey="activation" sort={chSort.sort} onSort={chSort.toggle} align="left" />
+                          <SortableHead label="کل درآمد" sortKey="revenue" sort={chSort.sort} onSort={chSort.toggle} align="left" />
+                          <SortableHead label="درآمد هر جذب" sortKey="perPatient" sort={chSort.sort} onSort={chSort.toggle} align="left" />
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {treatmentData.doctorBreakdown.map((doc) => (
-                          doc.categories.map((cat, ci) => (
-                            <TableRow key={`${doc.doctor}-${cat.name}`}>
-                              {ci === 0 && (
-                                <TableCell className="font-medium" rowSpan={doc.categories.length}>
-                                  {doc.doctor}
-                                </TableCell>
-                              )}
-                              <TableCell className="flex items-center gap-2">
-                                {getCatIcon(cat.name)}
-                                {cat.name}
-                              </TableCell>
-                              <TableCell>{toPersianNum(cat.count)}</TableCell>
-                              {ci === 0 && (
-                                <TableCell className="text-center font-bold" rowSpan={doc.categories.length}>
-                                  {toPersianNum(doc.total)}
-                                </TableCell>
-                              )}
-                            </TableRow>
-                          ))
+                        {chSort.sorted.map((c) => (
+                          <TableRow key={c.introductionId ?? "none"}>
+                            <TableCell className="font-medium">{c.channel}</TableCell>
+                            <TableCell className="text-left tabular-nums">{formatCount(c.patients)}</TableCell>
+                            <TableCell className="text-left tabular-nums">{formatCount(c.payingPatients)}</TableCell>
+                            <TableCell className="text-left"><RateBar value={c.activationRate} /></TableCell>
+                            <TableCell className="text-left tabular-nums" title={formatRialExact(c.revenue)}>{formatRial(c.revenue)}</TableCell>
+                            <TableCell className="text-left font-medium tabular-nums">{formatRial(c.revenuePerPatient)}</TableCell>
+                          </TableRow>
                         ))}
                       </TableBody>
                     </Table>
-                  </CardContent>
-                </Card>
-              )}
-            </>
-          )}
-        </TabsContent>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
 
-        {/* ─── Doctors Tab ─── */}
-        <TabsContent value="doctors" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Award className="text-amber-600 dark:text-amber-400" />
-                  تفکیک محبوبیت خدمات
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>خدمت درمانی</TableHead>
-                      <TableHead>تعداد پرونده‌ها</TableHead>
-                      <TableHead className="text-center">وضعیت</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {popularityData.map((item, idx) => (
-                      <TableRow key={item.name}>
-                        <TableCell className="font-medium">{toPersianNum(idx + 1)}. {item.name}</TableCell>
-                        <TableCell>{toPersianNum(item.count)} پرونده</TableCell>
-                        <TableCell className="text-center">
-                          <Badge variant={idx < 2 ? "default" : idx < 4 ? "secondary" : "outline"}>
-                            {idx < 2 ? "پرتقاضا" : idx < 4 ? "پایدار" : "عادی"}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Users className="text-emerald-600 dark:text-emerald-400" />
-                  ارزیابی عملکرد پرسنل
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>پزشک / اپراتور</TableHead>
-                      <TableHead>پذیرش نوبت</TableHead>
-                      <TableHead>طرح درمان ثبت‌شده</TableHead>
-                      <TableHead className="text-center">نسبت تبدیل</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {doctorData.map((doc) => {
-                      const rate = doc.reserveCount > 0 ? Math.round((doc.treatmentCount / doc.reserveCount) * 100) : 0
-                      return (
-                        <TableRow key={doc.doctorName} className="cursor-pointer hover:bg-muted/50" onClick={() => router.push(`/analytics/doctors/${encodeURIComponent(doc.doctorName)}`)}>
-                          <TableCell className="font-medium hover:underline">{doc.doctorName}</TableCell>
-                          <TableCell>{toPersianNum(doc.reserveCount)}</TableCell>
-                          <TableCell>{toPersianNum(doc.treatmentCount)}</TableCell>
-                          <TableCell className="text-center">
-                            <Badge variant={rate > 50 ? "default" : rate > 20 ? "secondary" : "outline"}>
-                              %{toPersianNum(rate)}
-                            </Badge>
-                          </TableCell>
+            <TabsContent value="demographics">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <DemoCard title="ارزش بر اساس جنسیت" rows={demo?.gender ?? []} />
+                <DemoCard title="ارزش بر اساس گروه سنی" rows={demo?.age ?? []} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="cohorts">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">کوهورت جذب</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    بیماران بر اساس ماه اولین مراجعه پولی گروه‌بندی شده‌اند: هر ماه چند بیمار جدید
+                    آمد و چه سهمی از آن‌ها دوباره برگشت.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>ماه</TableHead>
+                          <TableHead className="text-left">بیمار جدید</TableHead>
+                          <TableHead className="text-left">بازگشته</TableHead>
+                          <TableHead className="text-left">نرخ بازگشت</TableHead>
+                          <TableHead className="text-left">درآمد</TableHead>
+                          <TableHead className="text-left">درآمد هر بیمار</TableHead>
                         </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-      </Tabs>
+                      </TableHeader>
+                      <TableBody>
+                        {cohorts.map((c) => (
+                          <TableRow key={c.cohort}>
+                            <TableCell className="font-medium">{formatJalaliPeriod(c.cohort)}</TableCell>
+                            <TableCell className="text-left tabular-nums">{formatCount(c.newPatients)}</TableCell>
+                            <TableCell className="text-left tabular-nums">{formatCount(c.returnedPatients)}</TableCell>
+                            <TableCell className="text-left"><RateBar value={c.returnRate} /></TableCell>
+                            <TableCell className="text-left tabular-nums" title={formatRialExact(c.revenue)}>{formatRial(c.revenue)}</TableCell>
+                            <TableCell className="text-left tabular-nums">{formatRial(c.revenuePerPatient)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="booking">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">نوبت تا پذیرش</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {booking ? (
+                    <>
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <Stat label="کل نوبت‌ها" value={formatCount(booking.totalReserves)} />
+                        <Stat label="نوبت پذیرش‌شده (پرچم CRM)" value={formatCount(booking.acceptedReserves)} hint={formatPercent(booking.acceptanceRate, 0)} />
+                        <Stat label="نوبت گذشته قابل بررسی" value={formatCount(booking.matchableReserves)} hint="دارای کد بیمار و تاریخ گذشته" />
+                        <Stat label="رسیده به پذیرش" value={formatCount(booking.matchedReserves)} hint={formatPercent(booking.followThroughRate, 0)} tone="positive" />
+                      </div>
+                      <div className="flex items-start gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                        <Info className="mt-0.5 size-3.5 shrink-0" />
+                        <span>
+                          «رسیده به پذیرش» نوبت را با پذیرشِ همان بیمار در همان روز تطبیق می‌دهد، پس
+                          یک <b>کف</b> است نه نرخ دقیق عدم‌حضور: بیماری که جابه‌جا کرده و روز دیگری
+                          آمده، تطبیق نمی‌خورد. ضمناً {formatCount(booking.unidentifiedReserves)} نوبت
+                          اصلاً کد بیمار ندارند و از محاسبه کنار گذاشته شده‌اند.
+                        </span>
+                      </div>
+                    </>
+                  ) : null}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="clinical">
+              <div className="space-y-4">
+                {planCoverage ? (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/40">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>
+                      طرح‌های درمانی فقط{" "}
+                      <b>
+                        {formatCount(planCoverage.plans)} طرح برای{" "}
+                        {formatCount(planCoverage.planPatients)} بیمار
+                      </b>{" "}
+                      ثبت شده‌اند — یعنی <b>{formatPercent(planCoverage.coverageRate, 1)}</b> از{" "}
+                      {formatCount(planCoverage.billedPatients)} بیمار دارای سابقه مالی، و محدود به
+                      بازه {planCoverage.oldestPlanDate ? toPersianNum(planCoverage.oldestPlanDate) : "—"} تا{" "}
+                      {planCoverage.newestPlanDate ? toPersianNum(planCoverage.newestPlanDate) : "—"}.
+                      این بخش نماینده کل کلینیک نیست.
+                    </span>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Stat label="تشخیص منحصربه‌فرد" value={formatCount(matrix?.diagnoses.length ?? 0)} icon={<TrendingUp className="size-4" />} />
+                  <Stat label="آیتم درمانی منحصربه‌فرد" value={formatCount(matrix?.treatments.length ?? 0)} />
+                  <Stat label="طرح درمانی" value={formatCount(planCoverage?.plans ?? 0)} />
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">پرتکرارترین تشخیص → درمان</CardTitle>
+                      <p className="text-xs text-muted-foreground">
+                        برای هر تشخیص، رایج‌ترین آیتم درمانی تجویزشده
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>تشخیص</TableHead>
+                              <TableHead>رایج‌ترین درمان</TableHead>
+                              <TableHead className="text-left">دفعات</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(matrix?.diagnosisDetails ?? [])
+                              .slice(0, 12)
+                              .map((d) => (
+                                <TableRow key={d.diagnosis}>
+                                  <TableCell className="font-medium">{d.diagnosis}</TableCell>
+                                  <TableCell className="text-xs">
+                                    {d.treatments[0]?.name ?? "—"}
+                                  </TableCell>
+                                  <TableCell className="text-left tabular-nums">
+                                    {formatCount(d.treatments[0]?.count ?? 0)}
+                                    <span className="text-muted-foreground"> / {formatCount(d.total)}</span>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">پرکاربردترین آیتم‌های درمانی</CardTitle>
+                      <p className="text-xs text-muted-foreground">
+                        و شایع‌ترین تشخیصی که به آن منجر شده
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>آیتم درمانی</TableHead>
+                              <TableHead>شایع‌ترین تشخیص</TableHead>
+                              <TableHead className="text-left">دفعات</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(matrix?.treatmentDetails ?? [])
+                              .slice(0, 12)
+                              .map((t) => (
+                                <TableRow key={t.treatment}>
+                                  <TableCell className="font-medium">{t.treatment}</TableCell>
+                                  <TableCell className="text-xs">
+                                    {t.diagnoses[0]?.diagnosis ?? "—"}
+                                  </TableCell>
+                                  <TableCell className="text-left tabular-nums">
+                                    {formatCount(t.total)}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Link href="/analytics/medical" className="inline-flex text-sm text-primary underline underline-offset-4">
+                  کاوش تعاملی کامل تشخیص ↔ درمان
+                </Link>
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          <p className="text-xs text-muted-foreground">
+            محبوبیت خدمات و رتبه‌بندی پزشکان از این صفحه حذف شد چون در{" "}
+            <Link href="/crm" className="text-primary underline underline-offset-4">تحلیل مراجعین</Link>{" "}
+            بر پایه پذیرش‌های واقعی و با درآمد، نرخ بازگشت و نرخ تبدیل ارائه می‌شود. گزارش‌های مالی در{" "}
+            <Link href="/financial" className="text-primary underline underline-offset-4">تحلیل مالی</Link> است.
+          </p>
+        </>
+      )}
     </div>
+  )
+}
+
+function DemoCard({ title, rows }: { title: string; rows: DemographicValue[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          نه فقط تعداد — میانگین خرج هر گروه و سهمش از درآمد
+        </p>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>گروه</TableHead>
+                <TableHead className="text-left">بیماران</TableHead>
+                <TableHead className="text-left">میانگین خرج</TableHead>
+                <TableHead className="text-left">سهم درآمد</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.bucket}>
+                  <TableCell className="font-medium">{r.bucket}</TableCell>
+                  <TableCell className="text-left tabular-nums">{formatCount(r.patients)}</TableCell>
+                  <TableCell className="text-left tabular-nums" title={formatRialExact(r.averageSpend)}>
+                    {formatRial(r.averageSpend)}
+                  </TableCell>
+                  <TableCell className="text-left"><RateBar value={r.revenueShare} tone="amber" /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

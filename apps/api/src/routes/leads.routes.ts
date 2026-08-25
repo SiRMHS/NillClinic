@@ -11,8 +11,11 @@ import {
 } from "@jordan/shared";
 import { createEncryptFn, decrypt } from "../security/encryption.js";
 import { ZodError } from "zod";
+import { requirePermission, can } from "../middleware/permission.middleware.js";
 
 export const leadsRouter = Router();
+
+leadsRouter.use(requirePermission("leads"));
 const encrypt = createEncryptFn();
 
 const sourceMap = {
@@ -29,6 +32,18 @@ const leadInclude = {
   assignedUser: { select: { id: true, fullName: true, email: true } },
   campaign: { select: { id: true, name: true, slug: true } },
 };
+
+// Names and mobiles are stored encrypted, so the list cannot be searched or paged
+// in SQL — the client filters and paginates the whole set it is given. The list
+// therefore ships every lead by default; the cap is only a runaway guard.
+const DEFAULT_LEAD_LIMIT = 1000;
+const MAX_LEAD_LIMIT = 5000;
+
+function parseLimit(raw: unknown): number {
+  const n = Number(Array.isArray(raw) ? raw[0] : raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LEAD_LIMIT;
+  return Math.min(Math.floor(n), MAX_LEAD_LIMIT);
+}
 
 function isSuperAdmin(req: { user?: { permissions?: string[] } }): boolean {
   return req.user?.permissions?.includes("*") === true;
@@ -118,7 +133,7 @@ leadsRouter.get("/", async (req, res, next) => {
     const leads = await prisma.lead.findMany({
       where,
       orderBy,
-      take: 100,
+      take: parseLimit(req.query.limit),
       include: leadInclude,
     });
 
@@ -223,7 +238,7 @@ leadsRouter.post("/", async (req, res, next) => {
   }
 });
 
-leadsRouter.patch("/:id/assign", async (req, res, next) => {
+leadsRouter.patch("/:id/assign", requirePermission("leads.assign"), async (req, res, next) => {
   try {
     const { assignedUserId } = assignLeadSchema.parse(req.body);
 
@@ -574,8 +589,11 @@ leadsRouter.get("/:id/match-patient", async (req, res, next) => {
 
 leadsRouter.delete("/:id", async (req, res, next) => {
   try {
-    if (!isSuperAdmin(req)) {
-      res.status(403).json({ error: "فقط سوپر ادمین می‌تواند لید را حذف کند" });
+    // Deletion used to be superadmin-only. It is now its own grantable key so a
+    // sales lead can be given it without also being handed the whole system —
+    // superadmin still passes, because `*` satisfies every key.
+    if (!can(req, "leads.delete")) {
+      res.status(403).json({ error: "دسترسی حذف لید را ندارید" });
       return;
     }
     const lead = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { id: true } });

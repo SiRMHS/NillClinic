@@ -21,10 +21,29 @@ import {
   isAutoSyncRunning,
   resumeAutoSyncOnStartup,
 } from "../services/auto-sync.runner.js";
+import {
+  getSchedule,
+  updateSchedule,
+  runScheduledSyncNow,
+  abortScheduledSync,
+  isScheduledSyncRunning,
+  MIN_INTERVAL_MINUTES,
+  MAX_INTERVAL_MINUTES,
+  MAX_LOOKBACK_DAYS,
+} from "../services/sync-scheduler.service.js";
+import {
+  requirePermission,
+  requireSuperAdmin,
+} from "../middleware/permission.middleware.js";
 
 export { resumeAutoSyncOnStartup };
 
 export const syncRouter = Router();
+
+// Reading sync state is its own key; starting, configuring and purging are
+// separate ones, so an operator can be allowed to watch a sync without being
+// able to trigger or destroy one.
+syncRouter.use(requirePermission("sync"));
 
 const syncConfigSchema = z.object({
   maxPages: z.coerce.number().int().min(1).max(100).default(2),
@@ -37,6 +56,18 @@ const syncConfigSchema = z.object({
 const autoSettingsSchema = z.object({
   throttleDelayMs: z.coerce.number().int().min(0).max(30_000),
   pageSize: z.coerce.number().int().min(1).max(200),
+});
+
+const scheduleSchema = z.object({
+  scheduleEnabled: z.boolean().optional(),
+  intervalMinutes: z.coerce
+    .number()
+    .int()
+    .min(MIN_INTERVAL_MINUTES)
+    .max(MAX_INTERVAL_MINUTES)
+    .optional(),
+  lookbackDays: z.coerce.number().int().min(0).max(MAX_LOOKBACK_DAYS).optional(),
+  scheduleEntities: z.array(z.nativeEnum(SyncEntity)).optional(),
 });
 
 let currentAbortController: AbortController | null = null;
@@ -83,6 +114,7 @@ syncRouter.get("/status", async (_req, res, next) => {
       isRunning: isBackgroundSyncActive() || runningEntities.length > 0,
       runningEntities,
       hasActiveController: isBackgroundSyncActive(),
+      scheduledSyncRunning: isScheduledSyncRunning(),
       staleCleaned,
     });
   } catch (e) {
@@ -117,7 +149,7 @@ syncRouter.get("/auto", async (_req, res, next) => {
   }
 });
 
-syncRouter.post("/auto", async (req, res, next) => {
+syncRouter.post("/auto", requirePermission("sync.run"), async (req, res, next) => {
   try {
     const body = z.object({ enabled: z.boolean() }).parse(req.body);
     if (body.enabled) {
@@ -152,7 +184,7 @@ syncRouter.post("/auto", async (req, res, next) => {
   }
 });
 
-syncRouter.patch("/auto/settings", async (req, res, next) => {
+syncRouter.patch("/auto/settings", requirePermission("sync.settings"), async (req, res, next) => {
   try {
     if (isAutoSyncRunning()) {
       res.status(409).json({ error: "برای تغییر تنظیمات ابتدا سینک خودکار را مکث کنید" });
@@ -171,7 +203,7 @@ syncRouter.patch("/auto/settings", async (req, res, next) => {
   }
 });
 
-syncRouter.post("/auto/reset", async (req, res, next) => {
+syncRouter.post("/auto/reset", requirePermission("sync.run"), async (req, res, next) => {
   try {
     if (isAutoSyncRunning()) {
       res.status(409).json({ error: "ابتدا سینک خودکار را خاموش کنید" });
@@ -190,7 +222,7 @@ syncRouter.post("/auto/reset", async (req, res, next) => {
   }
 });
 
-syncRouter.post("/cancel", async (_req, res, next) => {
+syncRouter.post("/cancel", requirePermission("sync.run"), async (_req, res, next) => {
   try {
     if (currentAbortController) {
       currentAbortController.abort();
@@ -212,9 +244,9 @@ syncRouter.post("/cancel", async (_req, res, next) => {
   }
 });
 
-syncRouter.post("/purge", async (req, res, next) => {
+syncRouter.post("/purge", requirePermission("sync.purge"), async (req, res, next) => {
   try {
-    if (isBackgroundSyncActive() || isAutoSyncRunning()) {
+    if (isBackgroundSyncActive() || isAutoSyncRunning() || isScheduledSyncRunning()) {
       res.status(409).json({ error: "ابتدا سینک در حال اجرا را متوقف کنید" });
       return;
     }
@@ -240,9 +272,9 @@ syncRouter.post("/purge", async (req, res, next) => {
   }
 });
 
-syncRouter.post("/run", async (req, res, next) => {
+syncRouter.post("/run", requirePermission("sync.run"), async (req, res, next) => {
   try {
-    if (isBackgroundSyncActive() || isAutoSyncRunning()) {
+    if (isBackgroundSyncActive() || isAutoSyncRunning() || isScheduledSyncRunning()) {
       res.status(409).json({ error: "سینک دیگری در حال اجراست" });
       return;
     }
@@ -275,9 +307,9 @@ syncRouter.post("/run", async (req, res, next) => {
   }
 });
 
-syncRouter.post("/run/:entity", async (req, res, next) => {
+syncRouter.post("/run/:entity", requirePermission("sync.run"), async (req, res, next) => {
   try {
-    if (isBackgroundSyncActive() || isAutoSyncRunning()) {
+    if (isBackgroundSyncActive() || isAutoSyncRunning() || isScheduledSyncRunning()) {
       res.status(409).json({ error: "سینک دیگری در حال اجراست" });
       return;
     }
@@ -304,14 +336,64 @@ syncRouter.post("/run/:entity", async (req, res, next) => {
   }
 });
 
-syncRouter.get("/logs/:id/errors", async (req, res, next) => {
+// ─── Scheduled (hourly) incremental sync ───
+
+syncRouter.get("/schedule", async (_req, res, next) => {
   try {
-    const perm = req.user?.permissions ?? [];
-    if (!perm.includes("*")) {
-      res.status(403).json({ error: "فقط مدیر سیستم می‌تواند جزئیات خطا را مشاهده کند" });
-      return;
+    res.json(await getSchedule());
+  } catch (e) {
+    next(e);
+  }
+});
+
+syncRouter.patch("/schedule", requirePermission("sync.settings"), async (req, res, next) => {
+  try {
+    const input = scheduleSchema.parse(req.body);
+    const updated = await updateSchedule(input);
+
+    if (req.user?.email) {
+      const user = await prisma.user.findUnique({ where: { email: req.user.email } });
+      if (user) {
+        await prisma.auditLog.create({
+          data: {
+            userId: user.id,
+            action: AuditAction.SYNC_MANUAL,
+            metadata: JSON.parse(JSON.stringify({ action: "sync_schedule_update", input })),
+          },
+        });
+      }
     }
 
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+syncRouter.post("/schedule/run", requirePermission("sync.run"), async (_req, res, next) => {
+  try {
+    const result = await runScheduledSyncNow("manual");
+    if (!result.started) {
+      res.status(409).json({ error: result.reason ?? "سینک شروع نشد" });
+      return;
+    }
+    res.status(202).json({ ok: true, started: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+syncRouter.post("/schedule/cancel", requirePermission("sync.run"), async (_req, res, next) => {
+  try {
+    const aborted = abortScheduledSync();
+    res.json({ ok: true, aborted });
+  } catch (e) {
+    next(e);
+  }
+});
+
+syncRouter.get("/logs/:id/errors", requireSuperAdmin(), async (req, res, next) => {
+  try {
     const log = await prisma.syncLog.findUnique({ where: { id: req.params.id } });
     if (!log) {
       res.status(404).json({ error: "لاگ یافت نشد" });

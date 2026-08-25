@@ -17,7 +17,7 @@ model Role {
   name        String   @unique
   label       String?  @map("label")
   description String?
-  permissions String[]  // array of permission keys like ["dashboard", "patients.view", ...]
+  permissions String[] // array of permission keys like ["dashboard", "patients.view", ...]
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -27,22 +27,29 @@ model Role {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  fullName  String?  @map("full_name")
-  password  String?  // bcrypt hash
-  roleId    String?  @map("role_id")
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id           String    @id @default(cuid())
+  email        String    @unique
+  fullName     String?   @map("full_name")
+  password     String? // bcrypt hash
+  roleId       String?   @map("role_id")
+  isActive     Boolean   @default(true) @map("is_active")
+  // Bumped on logout and on password change. A JWT carries the version it was
+  // issued with, so raising this invalidates every token already handed out —
+  // without it, a stolen token stays valid until it expires no matter what the
+  // user does.
+  tokenVersion Int       @default(0) @map("token_version")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  role              Role?             @relation(fields: [roleId], references: [id])
-  auditLogs         AuditLog[]
-  interactions      LeadInteraction[]
-  assignedLeads     Lead[]            @relation("LeadAssignedUser")
-  leadCalls         LeadCall[]
-  leadFollowUps     LeadFollowUp[]
-  leadAppointments  LeadAppointment[]
+  role             Role?             @relation(fields: [roleId], references: [id])
+  auditLogs        AuditLog[]
+  interactions     LeadInteraction[]
+  assignedLeads    Lead[]            @relation("LeadAssignedUser")
+  leadCalls        LeadCall[]
+  leadFollowUps    LeadFollowUp[]
+  leadAppointments LeadAppointment[]
+  crmContacts      CrmContact[]      @relation("CrmContactAuthor")
 
   @@map("users")
 }
@@ -70,10 +77,12 @@ model Patient {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  treatments Treatment[]
-  reserves   Reserve[]
-  leads      Lead[]      @relation("LeadConvertedPatient")
-  receptions Reception[]
+  treatments  Treatment[]
+  reserves    Reserve[]
+  leads       Lead[]          @relation("LeadConvertedPatient")
+  receptions  Reception[]
+  metrics     PatientMetrics?
+  crmContacts CrmContact[]
 
   @@index([fullName])
   @@index([mobile])
@@ -82,38 +91,58 @@ model Patient {
 }
 
 model Service {
-  id           String   @id @default(cuid())
-  externalId   Int      @unique @map("external_id") // srvId
-  name         String
-  sectionName  String   @map("section_name")
-  sectionId    Int      @map("section_id")
-  tariff       Float    @default(0)
-  syncedAt     DateTime @map("synced_at")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id          String   @id @default(cuid())
+  externalId  Int      @unique @map("external_id") // srvId
+  name        String
+  sectionName String   @map("section_name")
+  // Nullable: the CRM omits it on some rows, and a missing section is not a
+  // reason to reject an otherwise valid service.
+  sectionId   Int?     @map("section_id")
+  tariff      Float    @default(0)
+  syncedAt    DateTime @map("synced_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("services")
 }
 
 model Reserve {
-  id           String   @id @default(cuid())
-  patientId    String?  @map("patient_id")
-  reserveDate  String   @map("reserve_date")
-  reserveTime  String   @map("reserve_time")
-  servicesRaw  String?  @map("services_raw")
-  createDate   String?  @map("create_date")
-  createTime   String?  @map("create_time")
-  isAccepted   Boolean  @default(false) @map("is_accepted")
-  doctorName   String   @map("doctor_name")
-  syncedAt     DateTime @map("synced_at")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id                  String   @id @default(cuid())
+  // Synthetic identity. The CRM exposes no reserve id, and
+  // (reserveDate, reserveTime, doctorName) is NOT unique — in a 1000-record
+  // sample it collapsed 1000 reserves into 836 rows, silently destroying 164.
+  // Derived by reserveExternalKey() from the full identity tuple.
+  externalKey         String   @unique @map("external_key")
+  patientId           String?  @map("patient_id")
+  // Denormalized patient identity: 56% of reserves carry a null patientCode,
+  // so name/mobile are the only way to resolve those to a Patient.
+  patientExternalCode Int?     @map("patient_external_code")
+  patientNameEnc      String?  @map("patient_name_enc")
+  patientName         String?  @map("patient_name")
+  patientMobileEnc    String?  @map("patient_mobile_enc")
+  patientMobile       String?  @map("patient_mobile")
+  reserveDate         String?  @map("reserve_date")
+  reserveTime         String?  @map("reserve_time")
+  servicesRaw         String?  @map("services_raw")
+  servicesList        Json     @default("[]") @map("services_list")
+  createDate          String?  @map("create_date")
+  createTime          String?  @map("create_time")
+  isAccepted          Boolean  @default(false) @map("is_accepted")
+  doctorName          String?  @map("doctor_name")
+  syncedAt            DateTime @map("synced_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   patient Patient? @relation(fields: [patientId], references: [id])
 
   @@index([reserveDate])
   @@index([doctorName])
-  @@unique([reserveDate, reserveTime, doctorName])
+  @@index([patientExternalCode])
+  @@index([patientMobile])
+  // Postgres does not index a FK column automatically. Without this, every
+  // patient delete degrades into a sequential scan of this table (the
+  // ON DELETE SET NULL trigger), and "reserves for patient X" is a full scan.
+  @@index([patientId])
   @@map("reserves")
 }
 
@@ -121,10 +150,10 @@ model Treatment {
   id                  String   @id @default(cuid())
   externalId          String   @unique @map("external_id") // treatmentPlanId
   patientId           String?  @map("patient_id")
-  externalPatientCode Int      @map("external_patient_code")
-  planDate            String   @map("plan_date")
-  planName            String   @map("plan_name")
-  planUser            String   @map("plan_user")
+  externalPatientCode Int?     @map("external_patient_code")
+  planDate            String?  @map("plan_date")
+  planName            String?  @map("plan_name")
+  planUser            String?  @map("plan_user")
   reasonName          String?  @map("reason_name")
   reasonNames         Json     @default("[]") @map("reason_names")
   detailsJson         Json     @map("details_json")
@@ -138,32 +167,164 @@ model Treatment {
   @@index([externalPatientCode])
   @@index([planUser])
   @@index([planDate])
+  @@index([patientId])
   @@map("treatments")
 }
 
 model Reception {
-  id                  String   @id @default(cuid())
-  externalId          Int      @unique @map("external_id")
-  receptionNo         Int      @map("reception_no")
-  patientExternalCode Int?     @map("patient_external_code")
-  patientId           String?  @map("patient_id")
-  receptionDate       String   @map("reception_date")
-  isReturn            Boolean  @default(false) @map("is_return")
-  description         String?  @map("description")
-  treatmentItemNames  String?  @map("treatment_item_names")
-  treatmentItemNamesList Json  @default("[]") @map("treatment_item_names_list")
-  userName            String   @map("user_name")
-  detailsJson         Json     @default("[]") @map("details_json")
-  syncedAt            DateTime @map("synced_at")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  id                     String    @id @default(cuid())
+  externalId             Int       @unique @map("external_id")
+  receptionNo            Int?      @map("reception_no")
+  patientExternalCode    Int?      @map("patient_external_code")
+  patientId              String?   @map("patient_id")
+  receptionDate          String?   @map("reception_date")
+  // Gregorian projection of the Jalali receptionDate, so period filtering and
+  // recency math are plain date comparisons instead of string juggling.
+  receptionAt            DateTime? @map("reception_at")
+  isReturn               Boolean   @default(false) @map("is_return")
+  description            String?   @map("description")
+  treatmentItemNames     String?   @map("treatment_item_names")
+  treatmentItemNamesList Json      @default("[]") @map("treatment_item_names_list")
+  userName               String?   @map("user_name")
+  detailsJson            Json      @default("[]") @map("details_json")
+  // Per-reception rollups of the line items. Denormalized so dashboard
+  // aggregates never have to join reception_items.
+  totalReceived          Decimal   @default(0) @map("total_received") @db.Decimal(18, 2)
+  totalDiscount          Decimal   @default(0) @map("total_discount") @db.Decimal(18, 2)
+  totalRemain            Decimal   @default(0) @map("total_remain") @db.Decimal(18, 2)
+  totalDeposit           Decimal   @default(0) @map("total_deposit") @db.Decimal(18, 2)
+  itemCount              Int       @default(0) @map("item_count")
+  syncedAt               DateTime  @map("synced_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
 
-  patient Patient? @relation(fields: [patientId], references: [id])
+  patient Patient?        @relation(fields: [patientId], references: [id])
+  items   ReceptionItem[]
 
   @@index([receptionDate])
+  @@index([receptionAt])
   @@index([patientExternalCode])
   @@index([userName])
+  @@index([patientId])
   @@map("receptions")
+}
+
+/// One billed line of a reception — the grain all financial reporting runs on.
+/// These four money columns arrive from the CRM but were previously stripped by
+/// the zod schema before ever reaching the database.
+model ReceptionItem {
+  id                  String    @id @default(cuid())
+  receptionId         String    @map("reception_id")
+  receptionExternalId Int       @map("reception_external_id")
+  lineNo              Int       @map("line_no")
+  sectionId           Int?      @map("section_id")
+  serviceExternalId   Int?      @map("service_external_id")
+  sectionName         String?   @map("section_name")
+  serviceName         String?   @map("service_name")
+  personnelName       String?   @map("personnel_name")
+  receivedPrice       Decimal   @default(0) @map("received_price") @db.Decimal(18, 2)
+  remainPrice         Decimal   @default(0) @map("remain_price") @db.Decimal(18, 2)
+  discount            Decimal   @default(0) @map("discount") @db.Decimal(18, 2)
+  depositPrice        Decimal   @default(0) @map("deposit_price") @db.Decimal(18, 2)
+  // Denormalized from the parent so revenue-by-period/service/doctor is a
+  // single-table scan.
+  receptionDate       String?   @map("reception_date")
+  receptionAt         DateTime? @map("reception_at")
+  patientExternalCode Int?      @map("patient_external_code")
+
+  reception Reception @relation(fields: [receptionId], references: [id], onDelete: Cascade)
+
+  @@unique([receptionExternalId, lineNo])
+  // Postgres does not index a FK column automatically. Without this, resolving
+  // the line items of one reception is a sequential scan of ~400k rows.
+  @@index([receptionId])
+  @@index([serviceExternalId])
+  @@index([sectionId])
+  @@index([personnelName])
+  @@index([receptionAt])
+  @@index([patientExternalCode])
+  @@map("reception_items")
+}
+
+/// Spend-based value tier. Distinct from `PatientSegment`, which is an RFM
+/// behaviour label: a patient can be GOLD by lifetime spend while sitting in
+/// the AT_RISK segment, and that combination is exactly the one worth a call.
+enum PatientTier {
+  PLATINUM
+  GOLD
+  SILVER
+  BRONZE
+  GRAY
+}
+
+enum PatientSegment {
+  CHAMPION
+  LOYAL
+  POTENTIAL
+  NEW
+  AT_RISK
+  DORMANT
+  LOST
+}
+
+/// Precomputed RFM ranking per patient. Rebuilt after each sync rather than
+/// computed per request — the aggregate spans every reception a patient has.
+model PatientMetrics {
+  patientId           String @id @map("patient_id")
+  patientExternalCode Int    @unique @map("patient_external_code")
+
+  firstVisitDate   String?   @map("first_visit_date")
+  lastVisitDate    String?   @map("last_visit_date")
+  lastVisitAt      DateTime? @map("last_visit_at")
+  recencyDays      Int?      @map("recency_days")
+  visitCount       Int       @default(0) @map("visit_count")
+  totalReceived    Decimal   @default(0) @map("total_received") @db.Decimal(18, 2)
+  totalDiscount    Decimal   @default(0) @map("total_discount") @db.Decimal(18, 2)
+  totalOutstanding Decimal   @default(0) @map("total_outstanding") @db.Decimal(18, 2)
+  avgTicket        Decimal   @default(0) @map("avg_ticket") @db.Decimal(18, 2)
+
+  // 1..5 quintile scores; rfmScore is the 3-digit composite (e.g. 545).
+  recencyScore   Int            @default(0) @map("recency_score")
+  frequencyScore Int            @default(0) @map("frequency_score")
+  monetaryScore  Int            @default(0) @map("monetary_score")
+  rfmScore       Int            @default(0) @map("rfm_score")
+  segment        PatientSegment @default(NEW)
+
+  /// Derived purely from `totalReceived` against the thresholds in
+  /// `TierSettings` — no recency or frequency input, so a tier only ever moves
+  /// when the patient actually spends more.
+  tier PatientTier @default(GRAY)
+
+  computedAt DateTime @map("computed_at")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([segment])
+  @@index([tier])
+  @@index([rfmScore])
+  @@index([totalReceived])
+  @@index([lastVisitAt])
+  @@map("patient_metrics")
+}
+
+/// Editable rial thresholds separating the value tiers.
+///
+/// A single row (id = 1). These are a commercial decision, not a property of
+/// the data, so they live in the database rather than in the scoring SQL:
+/// the clinic can move the platinum bar without a deploy. Defaults were chosen
+/// against the live distribution — they put ~3.8% of patients in PLATINUM,
+/// who account for ~53% of all revenue.
+///
+/// BRONZE is everything above zero but below `silverMin`; GRAY is zero or
+/// negative (refund-only) lifetime spend, so no explicit bound is stored.
+model TierSettings {
+  id          Int      @id @default(1)
+  platinumMin Decimal  @default(500000000) @map("platinum_min") @db.Decimal(18, 2)
+  goldMin     Decimal  @default(200000000) @map("gold_min") @db.Decimal(18, 2)
+  silverMin   Decimal  @default(50000000) @map("silver_min") @db.Decimal(18, 2)
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("tier_settings")
 }
 
 // ─── Lead System (Layer 4) ───
@@ -210,17 +371,17 @@ enum CampaignStatus {
 }
 
 model Campaign {
-  id          String         @id @default(cuid())
-  name        String
-  slug        String?        @unique
-  source      LeadSource?
-  status      CampaignStatus @default(ACTIVE)
-  budget      Int?
-  startDate   DateTime?      @map("start_date")
-  endDate     DateTime?      @map("end_date")
-  notes       String?
-  createdAt   DateTime       @default(now()) @map("created_at")
-  updatedAt   DateTime       @updatedAt      @map("updated_at")
+  id        String         @id @default(cuid())
+  name      String
+  slug      String?        @unique
+  source    LeadSource?
+  status    CampaignStatus @default(ACTIVE)
+  budget    Int?
+  startDate DateTime?      @map("start_date")
+  endDate   DateTime?      @map("end_date")
+  notes     String?
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
 
   leads Lead[]
 
@@ -229,39 +390,40 @@ model Campaign {
 }
 
 model Lead {
-  id                 String        @id @default(cuid())
+  id                 String       @id @default(cuid())
   source             LeadSource
-  status             LeadStatus    @default(NEW)
-  fullNameEnc        String?       @map("full_name_enc")
-  mobileEnc          String?       @map("mobile_enc")
-  metadata           Json          @default("{}")
-  externalRef        String?       @map("external_ref") // Manychat / n8n id
-  convertedPatientId String?       @map("converted_patient_id")
-  assignedUserId     String?       @map("assigned_user_id")
-  campaignId         String?       @map("campaign_id")
-  contactedAt        DateTime?     @map("contacted_at")
-  convertedAt        DateTime?     @map("converted_at")
-  nextFollowUpAt     DateTime?     @map("next_follow_up_at")
-  lastCallStatus     CallStatus?   @map("last_call_status")
-  lastCallOutcome    CallOutcome?  @map("last_call_outcome")
-  serviceReceived    Boolean?      @map("service_received")
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
+  status             LeadStatus   @default(NEW)
+  fullNameEnc        String?      @map("full_name_enc")
+  mobileEnc          String?      @map("mobile_enc")
+  metadata           Json         @default("{}")
+  externalRef        String?      @map("external_ref") // Manychat / n8n id
+  convertedPatientId String?      @map("converted_patient_id")
+  assignedUserId     String?      @map("assigned_user_id")
+  campaignId         String?      @map("campaign_id")
+  contactedAt        DateTime?    @map("contacted_at")
+  convertedAt        DateTime?    @map("converted_at")
+  nextFollowUpAt     DateTime?    @map("next_follow_up_at")
+  lastCallStatus     CallStatus?  @map("last_call_status")
+  lastCallOutcome    CallOutcome? @map("last_call_outcome")
+  serviceReceived    Boolean?     @map("service_received")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
 
   convertedPatient Patient?  @relation("LeadConvertedPatient", fields: [convertedPatientId], references: [id])
   assignedUser     User?     @relation("LeadAssignedUser", fields: [assignedUserId], references: [id])
   campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
-  interactions  LeadInteraction[]
-  calls         LeadCall[]
-  followUps     LeadFollowUp[]
-  appointments  LeadAppointment[]
+  interactions LeadInteraction[]
+  calls        LeadCall[]
+  followUps    LeadFollowUp[]
+  appointments LeadAppointment[]
 
   @@index([source, status])
   @@index([assignedUserId])
   @@index([campaignId])
   @@index([nextFollowUpAt])
   @@index([createdAt])
+  @@index([convertedPatientId])
   @@map("leads")
 }
 
@@ -325,11 +487,11 @@ model LeadInteraction {
   id        String   @id @default(cuid())
   leadId    String   @map("lead_id")
   userId    String?  @map("user_id")
-  type      String   // "NOTE" | "CALL" | "REPORT" | "MESSAGE"
+  type      String // "NOTE" | "CALL" | "REPORT" | "MESSAGE"
   content   String
   createdAt DateTime @default(now()) @map("created_at")
 
-  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
   user User? @relation(fields: [userId], references: [id])
 
   @@index([leadId, createdAt])
@@ -372,6 +534,10 @@ model SyncJobState {
   entity          SyncEntity    @id
   status          SyncJobStatus @default(IDLE)
   lastPage        Int           @default(1) @map("last_page")
+  // Date-window checkpoint (Jalali `YYYY/MM/DD`) for entities the CRM cannot
+  // page: Treatments ignores pageNumber/pageSize entirely and replays the same
+  // rows forever, so it is walked window-by-window instead.
+  cursorDate      String?       @map("cursor_date")
   recordsRead     Int           @default(0) @map("records_read")
   recordsUpserted Int           @default(0) @map("records_upserted")
   recordsFailed   Int           @default(0) @map("records_failed")
@@ -386,27 +552,56 @@ model SyncJobState {
 
 // Singleton row (id = 1) holding the auto-sync toggle + throttle settings.
 model SyncSettings {
-  id              Int      @id @default(1)
-  autoSyncEnabled Boolean  @default(false) @map("auto_sync_enabled")
-  throttleDelayMs Int      @default(500) @map("throttle_delay_ms")
-  pageSize        Int      @default(50) @map("page_size")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id              Int     @id @default(1)
+  autoSyncEnabled Boolean @default(false) @map("auto_sync_enabled")
+  // Was 500ms/50 rows: that combination alone turned a ~125k-row patient table
+  // into ~2500 requests and over two hours. The API serves 1000 rows per request
+  // in the same ~2.5s it takes to serve 50, and offset depth costs nothing.
+  throttleDelayMs Int     @default(0) @map("throttle_delay_ms")
+  pageSize        Int     @default(1000) @map("page_size")
+
+  // ─── Scheduled incremental sync ───
+  // The auto-sync above walks the whole CRM once and stops. Keeping the data
+  // fresh afterwards is a different job: a short, repeating pass over only the
+  // recent slice, which is what these columns drive.
+  scheduleEnabled   Boolean      @default(false) @map("schedule_enabled")
+  /**
+   * How often the incremental pass runs. 60 = hourly.
+   */
+  intervalMinutes   Int          @default(60) @map("interval_minutes")
+  /**
+   * How far back each pass re-reads, so edits to older rows are still caught.
+   */
+  lookbackDays      Int          @default(7) @map("lookback_days")
+  /**
+   * Empty means every entity.
+   */
+  scheduleEntities  SyncEntity[] @map("schedule_entities")
+  lastRunAt         DateTime?    @map("last_run_at")
+  nextRunAt         DateTime?    @map("next_run_at")
+  lastRunStatus     SyncStatus?  @map("last_run_status")
+  lastRunMessage    String?      @map("last_run_message")
+  lastRunRead       Int          @default(0) @map("last_run_read")
+  lastRunUpserted   Int          @default(0) @map("last_run_upserted")
+  lastRunDurationMs Int?         @map("last_run_duration_ms")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("sync_settings")
 }
 
 model SyncLog {
-  id           String      @id @default(cuid())
-  entity       SyncEntity
-  status       SyncStatus
-  trigger      SyncTrigger
-  recordsRead  Int         @default(0) @map("records_read")
-  recordsUpserted Int      @default(0) @map("records_upserted")
-  recordsFailed Int       @default(0) @map("records_failed")
-  errorMessage String?     @map("error_message")
-  startedAt    DateTime    @default(now()) @map("started_at")
-  finishedAt   DateTime?   @map("finished_at")
-  metadata     Json        @default("{}")
+  id              String      @id @default(cuid())
+  entity          SyncEntity
+  status          SyncStatus
+  trigger         SyncTrigger
+  recordsRead     Int         @default(0) @map("records_read")
+  recordsUpserted Int         @default(0) @map("records_upserted")
+  recordsFailed   Int         @default(0) @map("records_failed")
+  errorMessage    String?     @map("error_message")
+  startedAt       DateTime    @default(now()) @map("started_at")
+  finishedAt      DateTime?   @map("finished_at")
+  metadata        Json        @default("{}")
 
   @@index([entity, startedAt])
   @@map("sync_logs")
@@ -418,8 +613,8 @@ model SyncLog {
 
 model WebhookLog {
   id          String   @id @default(cuid())
-  source      String   @map("source")          // "instagram" | "whatsapp" | "site"
-  action      String   @map("action")          // "received" | "duplicate" | "created" | "rejected"
+  source      String   @map("source") // "instagram" | "whatsapp" | "site"
+  action      String   @map("action") // "received" | "duplicate" | "created" | "rejected"
   name        String?  @map("name")
   phone       String?  @map("phone")
   externalRef String?  @map("external_ref")
@@ -460,4 +655,139 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([action, createdAt])
   @@map("audit_logs")
+}
+
+// ─── CRM follow-up desk (replaces the clinic's CRM workbook) ───
+
+enum CrmContactKind {
+  FOLLOW_UP
+  SURVEY
+  CONSULT
+  RENUVION
+  WALK_IN
+}
+
+enum CrmRating {
+  EXCELLENT
+  GOOD
+  AVERAGE
+  POOR
+  VERY_POOR
+}
+
+enum CrmLikelihood {
+  VERY_HIGH
+  HIGH
+  MEDIUM
+  LOW
+  VERY_LOW
+}
+
+enum CrmCallResult {
+  ANSWERED
+  NO_ANSWER
+  UNREACHABLE
+  UNAVAILABLE
+  WRONG_NUMBER
+}
+
+enum CrmChannel {
+  FRIENDS
+  SITE
+  INSTAGRAM
+  TV
+  PREVIOUS_PATIENT
+  OTHER_ADS
+}
+
+/// One recorded contact with a patient after their visit — a follow-up call, a
+/// returned survey, or a complaint taken at the desk. The workbook this
+/// replaces used one sheet per month; `kind` plus `contactDate` carries that
+/// distinction without needing a new table each time.
+model CrmContact {
+  id   String         @id @default(cuid())
+  kind CrmContactKind @default(FOLLOW_UP)
+
+  patientId           String? @map("patient_id")
+  patientExternalCode Int?    @map("patient_external_code")
+  // Names and mobiles follow the same encrypt-at-rest/plain-for-search split
+  // the rest of the schema uses, so CRM rows are no more exposed than the
+  // patient records they mirror.
+  patientNameEnc      String? @map("patient_name_enc")
+  patientName         String? @map("patient_name")
+  patientMobileEnc    String? @map("patient_mobile_enc")
+  patientMobile       String? @map("patient_mobile")
+  doctorName          String? @map("doctor_name")
+
+  /// Jalali, as entered. The desk works entirely in Jalali dates.
+  visitDate   String?   @map("visit_date")
+  contactDate String    @map("contact_date")
+  /// Gregorian projection of contactDate so range filters and month rollups
+  /// are date comparisons instead of string juggling — same trick as
+  /// `Reception.receptionAt`.
+  contactAt   DateTime? @map("contact_at")
+
+  serviceName String?  @map("service_name")
+  /// The sheet recorded money as prose ("۱۰ میلیون و ۹۰۰ هزار تومان"); the
+  /// text is kept verbatim and `amount` holds it in Rial when parseable.
+  amountText  String?  @map("amount_text")
+  amount      Decimal? @db.Decimal(18, 2)
+
+  schedulingRating CrmRating? @map("scheduling_rating")
+  doctorRating     CrmRating? @map("doctor_rating")
+  assistantRating  CrmRating? @map("assistant_rating")
+  receptionRating  CrmRating? @map("reception_rating")
+  hygieneRating    CrmRating? @map("hygiene_rating")
+
+  referralLikelihood CrmLikelihood? @map("referral_likelihood")
+  revisitLikelihood  CrmLikelihood? @map("revisit_likelihood")
+  channels           CrmChannel[]   @default([])
+
+  callResult CrmCallResult? @map("call_result")
+  suggestion String?
+  notes      String?
+  rebookNote String?        @map("rebook_note")
+
+  resultsOnset   String? @map("results_onset")
+  sideEffect     String? @map("side_effect")
+  overallOpinion String? @map("overall_opinion")
+
+  painSwelling       String? @map("pain_swelling")
+  delayComplaint     String? @map("delay_complaint")
+  positiveNote       String? @map("positive_note")
+  doctorReferral     String? @map("doctor_referral")
+  patientSummary     String? @map("patient_summary")
+  callCenterReferral String? @map("call_center_referral")
+  resurveyDate       String? @map("resurvey_date")
+  resurveyResult     String? @map("resurvey_result")
+
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  createdBy User?    @relation("CrmContactAuthor", fields: [createdById], references: [id])
+
+  @@index([kind, contactAt])
+  @@index([contactAt])
+  @@index([contactDate])
+  @@index([doctorName])
+  @@index([patientExternalCode])
+  @@index([patientId])
+  @@index([createdById])
+  @@map("crm_contacts")
+}
+
+/// The `روزهای پزشکان` sheet: which days each doctor is in, so the desk knows
+/// when a rebook request can actually be honoured.
+model CrmDoctorSchedule {
+  id         String   @id @default(cuid())
+  doctorName String   @map("doctor_name")
+  /// 0 = شنبه … 6 = جمعه.
+  weekday    Int
+  note       String?
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([doctorName, weekday])
+  @@map("crm_doctor_schedules")
 }

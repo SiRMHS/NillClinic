@@ -39,17 +39,16 @@ async function main() {
   // ── Test 2: GetServices ──
   console.log();
   console.log("─".repeat(60));
-  console.log("Test 2: GetServices (with pagination)");
+  console.log("Test 2: GetServices (endpoint ignores pagination)");
   console.log("─".repeat(60));
   try {
-    const services = await client.getServices({ page: 1, pageSize: 10 });
+    // GetServices takes no paging args: the CRM returns the full catalogue
+    // regardless, and page 500 is byte-identical to page 1.
+    const services = await client.getServices();
     console.log(`  ✓ Received ${services.length} services`);
     if (services.length > 0) {
       console.log(`  Sample:`, JSON.stringify(services[0], null, 2));
     }
-    // Try without pagination
-    const allServices = await client.getServices();
-    console.log(`  ✓ All services (no pagination): ${allServices.length} records`);
   } catch (err) {
     console.error(`  ✗ GetServices failed:`, err instanceof Error ? err.message : err);
   }

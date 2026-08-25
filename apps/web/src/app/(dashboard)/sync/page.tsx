@@ -88,6 +88,22 @@ interface AutoState {
   jobStates: JobState[]
 }
 
+interface ScheduleState {
+  scheduleEnabled: boolean
+  intervalMinutes: number
+  lookbackDays: number
+  scheduleEntities: SyncEntity[]
+  allEntitiesSelected: boolean
+  lastRunAt: string | null
+  nextRunAt: string | null
+  lastRunStatus: SyncStatus | null
+  lastRunMessage: string | null
+  lastRunRead: number
+  lastRunUpserted: number
+  lastRunDurationMs: number | null
+  isRunning: boolean
+}
+
 interface ErrorPage {
   items: { recordId: string; message: string }[]
   total: number
@@ -105,6 +121,31 @@ const AUTO_SPEED_OPTIONS = [
   { value: 2000, label: "خیلی آرام — ۲ ثانیه" },
 ]
 const AUTO_PAGE_SIZE_OPTIONS = [20, 25, 40, 50, 100, 125, 200]
+
+/**
+ * Intervals an operator would actually pick. Hourly is the default and the
+ * reason this exists; anything under a quarter of an hour is rejected by the
+ * API, since a pass takes longer than that on a busy day.
+ */
+const INTERVAL_OPTIONS = [
+  { value: 15, label: "هر ۱۵ دقیقه" },
+  { value: 30, label: "هر ۳۰ دقیقه" },
+  { value: 60, label: "هر ۱ ساعت" },
+  { value: 120, label: "هر ۲ ساعت" },
+  { value: 240, label: "هر ۴ ساعت" },
+  { value: 360, label: "هر ۶ ساعت" },
+  { value: 720, label: "هر ۱۲ ساعت" },
+  { value: 1440, label: "روزی یک بار" },
+]
+
+const LOOKBACK_OPTIONS = [
+  { value: 1, label: "۱ روز اخیر" },
+  { value: 3, label: "۳ روز اخیر" },
+  { value: 7, label: "۷ روز اخیر" },
+  { value: 14, label: "۱۴ روز اخیر" },
+  { value: 30, label: "۳۰ روز اخیر" },
+  { value: 90, label: "۹۰ روز اخیر" },
+]
 
 const entityLabels: Record<SyncEntity, string> = {
   PATIENTS: "بیماران",
@@ -165,6 +206,14 @@ export default function SyncPage() {
   const [logs, setLogs] = useState<SyncLog[]>([])
   const [loading, setLoading] = useState(true)
   const [autoState, setAutoState] = useState<AutoState | null>(null)
+  const [schedule, setSchedule] = useState<ScheduleState | null>(null)
+  const [savingSchedule, setSavingSchedule] = useState(false)
+  const [runningScheduleNow, setRunningScheduleNow] = useState(false)
+  const [intervalMinutes, setIntervalMinutes] = useState(60)
+  const [lookbackDays, setLookbackDays] = useState(7)
+  const [scheduleEntities, setScheduleEntities] = useState<Set<SyncEntity>>(new Set(ALL_ENTITIES))
+  const scheduleDirtyRef = useRef(false)
+  const [scheduleDirty, setScheduleDirty] = useState(false)
   const [showErrors, setShowErrors] = useState<Set<string>>(new Set())
   const [showConfig, setShowConfig] = useState(false)
   const [filterEntity, setFilterEntity] = useState<SyncEntity | "ALL">("ALL")
@@ -199,22 +248,33 @@ export default function SyncPage() {
     return apiFetch<AutoState>("/api/sync/auto")
   }, [])
 
+  const fetchSchedule = useCallback(async () => {
+    return apiFetch<ScheduleState>("/api/sync/schedule")
+  }, [])
+
   const refresh = useCallback(async () => {
     try {
-      const [auto, data] = await Promise.all([fetchAuto(), fetchLogs()])
+      const [auto, data, sched] = await Promise.all([fetchAuto(), fetchLogs(), fetchSchedule()])
       startTransition(() => {
         setAutoState(auto)
         setLogs(data)
+        setSchedule(sched)
         setLoading(false)
         if (!autoSettingsDirtyRef.current) {
           setAutoThrottleDelayMs(auto.throttleDelayMs)
           setAutoPageSize(auto.pageSize)
         }
+        // Polling every two seconds would otherwise stomp on half-made edits.
+        if (!scheduleDirtyRef.current) {
+          setIntervalMinutes(sched.intervalMinutes)
+          setLookbackDays(sched.lookbackDays)
+          setScheduleEntities(new Set(sched.scheduleEntities))
+        }
       })
     } catch {
       startTransition(() => setLoading(false))
     }
-  }, [fetchAuto, fetchLogs])
+  }, [fetchAuto, fetchLogs, fetchSchedule])
 
   useEffect(() => {
     void refresh()
@@ -265,6 +325,51 @@ export default function SyncPage() {
       toast.error(err instanceof Error ? err.message : "خطا در ذخیره تنظیمات سینک خودکار")
     } finally {
       setSavingAutoSettings(false)
+    }
+  }
+
+  const saveSchedule = async (patch: Partial<{
+    scheduleEnabled: boolean
+    intervalMinutes: number
+    lookbackDays: number
+    scheduleEntities: SyncEntity[]
+  }>) => {
+    setSavingSchedule(true)
+    try {
+      const next = await apiFetch<ScheduleState>("/api/sync/schedule", {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      })
+      scheduleDirtyRef.current = false
+      setScheduleDirty(false)
+      setSchedule(next)
+      setIntervalMinutes(next.intervalMinutes)
+      setLookbackDays(next.lookbackDays)
+      setScheduleEntities(new Set(next.scheduleEntities))
+      toast.success(
+        patch.scheduleEnabled === true
+          ? "سینک زمان‌بندی‌شده روشن شد"
+          : patch.scheduleEnabled === false
+            ? "سینک زمان‌بندی‌شده خاموش شد"
+            : "تنظیمات زمان‌بندی ذخیره شد",
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "خطا در ذخیره زمان‌بندی")
+    } finally {
+      setSavingSchedule(false)
+    }
+  }
+
+  const runScheduleNow = async () => {
+    setRunningScheduleNow(true)
+    try {
+      await apiFetch<{ ok: boolean }>("/api/sync/schedule/run", { method: "POST" })
+      toast.success("سینک به‌روزرسانی هم‌اکنون شروع شد")
+      await refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "خطا در شروع سینک")
+    } finally {
+      setRunningScheduleNow(false)
     }
   }
 
@@ -399,6 +504,178 @@ export default function SyncPage() {
           )}
         </div>
       </div>
+
+      {/* Scheduled incremental sync — the "keep it fresh" half of syncing */}
+      <Card className={cn("border-2", schedule?.scheduleEnabled ? "border-emerald-500/60" : "border-border")}>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between gap-2 text-base">
+            <div className="flex items-center gap-2">
+              <Clock className="size-4" />
+              سینک ساعتی (به‌روزرسانی خودکار)
+              {schedule?.isRunning && (
+                <Badge variant="secondary" className="gap-1">
+                  <Loader2 className="size-3 animate-spin" />
+                  در حال اجرا
+                </Badge>
+              )}
+            </div>
+            <Switch
+              checked={schedule?.scheduleEnabled ?? false}
+              disabled={savingSchedule || !schedule}
+              onCheckedChange={(checked) => void saveSchedule({ scheduleEnabled: checked })}
+            />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            سینک کامل فقط یک بار همه داده‌ها را می‌خواند و تمام می‌شود. این بخش بعد از آن، در بازه‌ای که
+            انتخاب می‌کنید فقط داده‌های اخیر را دوباره می‌خواند تا داشبورد همیشه به‌روز بماند — پذیرش‌ها،
+            طرح‌های درمانی و رزروها بر اساس تاریخ، و بیماران از انتهای فهرست.
+          </p>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="schedule-interval">هر چند وقت یک بار</Label>
+              <select
+                id="schedule-interval"
+                className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                value={intervalMinutes}
+                disabled={savingSchedule}
+                onChange={(event) => {
+                  scheduleDirtyRef.current = true
+                  setScheduleDirty(true)
+                  setIntervalMinutes(Number(event.target.value))
+                }}
+              >
+                {INTERVAL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="schedule-lookback">هر بار چقدر عقب‌تر بخواند</Label>
+              <select
+                id="schedule-lookback"
+                className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                value={lookbackDays}
+                disabled={savingSchedule}
+                onChange={(event) => {
+                  scheduleDirtyRef.current = true
+                  setScheduleDirty(true)
+                  setLookbackDays(Number(event.target.value))
+                }}
+              >
+                {LOOKBACK_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                رکوردهایی که بعداً ویرایش می‌شوند (مثل تسویه پرداخت) با همین بازه دوباره خوانده می‌شوند.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>بخش‌هایی که به‌روز می‌شوند</Label>
+            <div className="flex flex-wrap gap-2">
+              {ALL_ENTITIES.map((entity) => {
+                const on = scheduleEntities.has(entity)
+                return (
+                  <button
+                    key={entity}
+                    type="button"
+                    disabled={savingSchedule}
+                    onClick={() => {
+                      scheduleDirtyRef.current = true
+                      setScheduleDirty(true)
+                      setScheduleEntities((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(entity)) next.delete(entity)
+                        else next.add(entity)
+                        return next
+                      })
+                    }}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs transition-colors",
+                      on
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {entityLabels[entity]}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() => void saveSchedule({
+                intervalMinutes,
+                lookbackDays,
+                scheduleEntities: Array.from(scheduleEntities),
+              })}
+              disabled={savingSchedule || !scheduleDirty || scheduleEntities.size === 0}
+            >
+              <Save />
+              {savingSchedule ? "در حال ذخیره..." : "ذخیره زمان‌بندی"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void runScheduleNow()}
+              disabled={runningScheduleNow || schedule?.isRunning || anyRunning}
+            >
+              <Play />
+              اجرای فوری
+            </Button>
+            {scheduleEntities.size === 0 && (
+              <span className="text-xs text-rose-600">حداقل یک بخش را انتخاب کنید.</span>
+            )}
+          </div>
+
+          {schedule && (
+            <div className="grid gap-3 rounded-xl border bg-muted/20 p-4 text-sm sm:grid-cols-3">
+              <div>
+                <div className="text-xs text-muted-foreground">اجرای بعدی</div>
+                <div className="font-medium">
+                  {schedule.scheduleEnabled && schedule.nextRunAt
+                    ? formatDate(schedule.nextRunAt)
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">آخرین اجرا</div>
+                <div className="font-medium">
+                  {schedule.lastRunAt ? timeAgo(schedule.lastRunAt) : "هنوز اجرا نشده"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">نتیجه آخرین اجرا</div>
+                <div className="flex items-center gap-2">
+                  {schedule.lastRunStatus ? (
+                    <Badge variant={statusConfig[schedule.lastRunStatus].variant}>
+                      {statusConfig[schedule.lastRunStatus].label}
+                    </Badge>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                  {schedule.lastRunAt && (
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {toPersianNum(schedule.lastRunUpserted)} رکورد
+                    </span>
+                  )}
+                </div>
+              </div>
+              {schedule.lastRunMessage && (
+                <p className="sm:col-span-3 text-xs text-muted-foreground break-words">
+                  {schedule.lastRunMessage}
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Auto full-sync switch */}
       <Card className={cn("border-2", autoRunning ? "border-primary/60" : "border-border")}>

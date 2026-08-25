@@ -22,7 +22,23 @@ async function main() {
       name: "admin",
       label: "مدیر کلینیک",
       description: "مدیریت کاربران و مشاهده همه بخش‌ها",
-      permissions: ["dashboard", "patients", "patients.view", "leads", "crm", "analytics", "sync", "settings"],
+      // Parent keys only: "analytics" carries the report sub-keys, "financial"
+      // carries the money sub-keys, and so on (see apps/api/src/lib/permissions.ts).
+      permissions: [
+        "dashboard",
+        "patients",
+        "leads",
+        "campaigns",
+        "crm",
+        "crm.desk",
+        "analytics",
+        "financial",
+        "sync",
+        "sync.settings",
+        "settings",
+        "settings.users",
+        "settings.roles",
+      ],
     },
   });
 
@@ -33,6 +49,7 @@ async function main() {
       name: "analyst",
       label: "تحلیلگر",
       description: "مشاهده گزارش‌ها و تحلیل‌ها",
+      // Reporting without money: the point of splitting the financial keys out.
       permissions: ["dashboard", "patients.view", "crm", "analytics"],
     },
   });
@@ -44,7 +61,7 @@ async function main() {
       name: "reception",
       label: "پذیرش",
       description: "مدیریت بیماران و نوبت‌دهی",
-      permissions: ["dashboard", "patients", "patients.view", "leads"],
+      permissions: ["dashboard", "patients", "leads"],
     },
   });
 

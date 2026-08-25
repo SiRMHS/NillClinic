@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { CrmSyncService, type SyncConfig } from "./crm-sync.service.js";
+import { CrmSyncService, type SyncConfig, type IncrementalOptions } from "./crm-sync.service.js";
 import type { SyncEntity } from "@jordan/db";
 import { JordanApiClient } from "./jordan-api.client.js";
 import type { EncryptFn } from "./types.js";
@@ -17,21 +17,24 @@ export function initSyncEngine(encrypt: EncryptFn): CrmSyncService {
   return syncService;
 }
 
+/**
+ * Env-driven cron entry point, kept for deployments that prefer a fixed
+ * schedule in configuration. The dashboard's own scheduler (see
+ * apps/api/src/services/sync-scheduler.service.ts) is the supported path —
+ * it stores its interval in the database so operators can change it without a
+ * redeploy — and this is only wired up when SYNC_CRON_ENABLED is set to "true".
+ */
 export function registerCronJobs(encrypt: EncryptFn): void {
-  const enabled = process.env.SYNC_CRON_ENABLED !== "false";
-  const schedule = process.env.SYNC_CRON_SCHEDULE ?? "0 */6 * * *";
+  if (process.env.SYNC_CRON_ENABLED !== "true") return;
 
-  if (!enabled) return;
-
+  const schedule = process.env.SYNC_CRON_SCHEDULE ?? "0 * * * *";
   initSyncEngine(encrypt);
 
-  const crontConfig: SyncConfig = {
-    maxPages: Number(process.env.SYNC_MAX_PAGES) || 1,
-    pageSize: Number(process.env.SYNC_PAGE_SIZE) || 50,
-  };
-
   cron.schedule(schedule, () => {
-    void syncService?.syncAll("CRON", crontConfig);
+    void syncService?.syncAllIncremental({
+      lookbackDays: Number(process.env.SYNC_LOOKBACK_DAYS) || undefined,
+      pageSize: Number(process.env.SYNC_PAGE_SIZE) || undefined,
+    });
   });
 }
 
@@ -46,4 +49,10 @@ export async function runAutoSync(
 ) {
   const service = syncService ?? initSyncEngine(encrypt);
   return service.syncAllAuto(opts);
+}
+
+/** One pass of the scheduled refresh over the recent slice only. */
+export async function runIncrementalSync(encrypt: EncryptFn, opts: IncrementalOptions = {}) {
+  const service = syncService ?? initSyncEngine(encrypt);
+  return service.syncAllIncremental(opts);
 }

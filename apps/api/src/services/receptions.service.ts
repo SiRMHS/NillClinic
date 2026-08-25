@@ -13,11 +13,13 @@ function createJordanClient() {
 export interface ReceptionView {
   id: string;
   externalId: number;
-  receptionNo: number;
-  receptionDate: string;
+  // Nullable throughout: the CRM omits these on real rows, and rejecting such
+  // records is what previously cost ~6.7k patients and ~2k reserves.
+  receptionNo: number | null;
+  receptionDate: string | null;
   treatmentItemNames: string | null;
   treatmentItemNamesList: string[];
-  userName: string;
+  userName: string | null;
   isReturn: boolean;
   detailsJson: unknown;
   patientExternalCode: number | null;
@@ -70,7 +72,7 @@ export async function fetchReceptionsLive(options: FetchReceptionsOptions = {}):
     receptionDate: data.receptionDate,
     treatmentItemNames: data.treatmentItemNames ?? null,
     treatmentItemNamesList,
-    userName: data.userName,
+    userName: data.userName ?? null,
     isReturn: data.isReturn,
     detailsJson: data.receptionDetailDtos,
     patientExternalCode: data.patientNo,
@@ -82,7 +84,7 @@ export async function fetchReceptionsLive(options: FetchReceptionsOptions = {}):
     results = results.filter((r) =>
       (r.patient?.fullName?.toLowerCase().includes(q)) ||
       (r.treatmentItemNames?.toLowerCase().includes(q)) ||
-      r.userName.toLowerCase().includes(q) ||
+      r.userName?.toLowerCase().includes(q) ||
       r.treatmentItemNamesList.some((t) => t.toLowerCase().includes(q)) ||
       String(r.receptionNo).includes(q) ||
       String(r.patientExternalCode).includes(q),
@@ -90,7 +92,7 @@ export async function fetchReceptionsLive(options: FetchReceptionsOptions = {}):
   }
 
   return results.sort((a, b) => {
-    const dateCmp = b.receptionDate.localeCompare(a.receptionDate);
-    return dateCmp !== 0 ? dateCmp : b.receptionNo - a.receptionNo;
+    const dateCmp = (b.receptionDate ?? "").localeCompare(a.receptionDate ?? "");
+    return dateCmp !== 0 ? dateCmp : (b.receptionNo ?? 0) - (a.receptionNo ?? 0);
   });
 }

@@ -5,8 +5,11 @@ import {
   updateCampaignSchema,
 } from "@jordan/shared";
 import { decrypt } from "../security/encryption.js";
+import { requirePermission } from "../middleware/permission.middleware.js";
 
 export const campaignsRouter = Router();
+
+campaignsRouter.use(requirePermission("campaigns"));
 
 function slugify(name: string): string {
   return name

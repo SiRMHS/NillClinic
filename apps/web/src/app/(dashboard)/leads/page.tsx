@@ -72,14 +72,6 @@ export default function LeadsPage() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  // Auto-check patient match for all loaded leads
-  useEffect(() => {
-    for (const l of leads) {
-      if (!(l.id in patientMatches) && l.mobile) void checkPatientMatch(l.id)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads])
-
   const updateLeadInList = (updated: Lead) => {
     setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)))
   }
@@ -173,6 +165,16 @@ export default function LeadsPage() {
 
   // Reset page when filters change
   useEffect(() => { setPage(1) }, [statusFilter, search, activeTab, leads.length])
+
+  // Auto-check the patient match, but only for the rows on screen: the list now
+  // holds every lead, and one request per lead would burn the whole rate limit.
+  const pagedIds = paged.map((l) => l.id).join(",")
+  useEffect(() => {
+    for (const l of paged) {
+      if (!(l.id in patientMatches) && l.mobile) void checkPatientMatch(l.id)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagedIds])
 
   const [patientMatches, setPatientMatches] = useState<Record<string, { id: string; externalCode: number; fullName: string | null } | null>>({})
   const checkPatientMatch = async (leadId: string) => {

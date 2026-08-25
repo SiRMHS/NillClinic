@@ -13,7 +13,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "backfill": "tsx src/scripts/backfill.ts"
   },
   "dependencies": {
     "@jordan/db": "workspace:*",
@@ -24,6 +25,7 @@
     "@types/node": "^22.15.21",
     "@types/node-cron": "^3.0.11",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "tsx": "^4.22.4"
   }
 }

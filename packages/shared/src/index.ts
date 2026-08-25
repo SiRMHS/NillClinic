@@ -2,4 +2,8 @@ export * from "./schemas/jordan-api.js";
 export * from "./schemas/lead.js";
 export * from "./schemas/campaign.js";
 export * from "./schemas/analytics.js";
+export * from "./schemas/financial.js";
+export * from "./schemas/reporting.js";
+export * from "./schemas/crm-desk.js";
 export * from "./utils/crm-text.js";
+export * from "./utils/jalali.js";

@@ -1,7 +1,12 @@
 import { Router } from "express";
 import { fetchReceptionsLive } from "../services/receptions.service.js";
+import { requireAnyPermission } from "../middleware/permission.middleware.js";
 
 export const receptionsRouter = Router();
+
+// Reception rows are read from two places: a patient's file and the reception
+// panel inside a lead, so either section's key is enough.
+receptionsRouter.use(requireAnyPermission("patients.view", "leads"));
 
 const jalaliDatePattern = /^\d{4}\/\d{2}\/\d{2}$/;
 

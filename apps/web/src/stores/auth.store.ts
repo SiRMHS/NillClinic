@@ -7,57 +7,57 @@ export interface UserInfo {
   fullName: string | null;
   role: string;
   permissions: string[];
+  lastLoginAt?: string | null;
 }
 
 interface AuthState {
   user: UserInfo | null;
-  token: string | null;
   isLoaded: boolean;
   load: () => void;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   hasPermission: (perm: string) => boolean;
 }
 
+/**
+ * The session token is no longer held in JS at all — it lives in an httpOnly
+ * cookie, so there is nothing here for an XSS payload to steal. `/api/auth/me`
+ * is the only way to learn whether the cookie is still valid, which is why load
+ * always calls it instead of trusting a cached copy.
+ */
 export const useAuth = create<AuthState>((set, get) => ({
   user: null,
-  token: null,
   isLoaded: false,
 
   load: () => {
     if (typeof window === "undefined") return;
-    const token = localStorage.getItem("token");
-    if (!token) {
-      set({ isLoaded: true });
-      return;
-    }
     apiFetch<UserInfo>("/api/auth/me")
       .then((user) => {
-        localStorage.setItem("user", JSON.stringify(user));
-        set({ user, token, isLoaded: true });
+        set({ user, isLoaded: true });
       })
       .catch(() => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-        set({ isLoaded: true });
+        set({ user: null, isLoaded: true });
       });
   },
 
   login: async (email: string, password: string) => {
-    const data = await apiFetch<{ token: string; user: UserInfo }>("/api/auth/login", {
+    // The response carries the CSRF token and the user; the session itself
+    // arrives as a Set-Cookie the browser stores for us.
+    const data = await apiFetch<{ csrfToken: string; user: UserInfo }>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-    localStorage.setItem("token", data.token);
-    localStorage.setItem("user", JSON.stringify(data.user));
-    set({ user: data.user, token: data.token });
+    set({ user: data.user, isLoaded: true });
   },
 
-  logout: () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    set({ user: null, token: null });
+  logout: async () => {
+    // Server-side logout bumps the user's token version, so any copy of the
+    // token that leaked elsewhere stops working too.
+    await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    set({ user: null });
     if (typeof window !== "undefined") {
+      localStorage.removeItem("user");
+      localStorage.removeItem("token");
       window.location.href = "/login";
     }
   },

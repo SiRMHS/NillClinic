@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { prisma } from "@jordan/db";
 
+import { requirePermission } from "../middleware/permission.middleware.js";
+
 export const webhookLogsRouter = Router();
+
+webhookLogsRouter.use(requirePermission("settings.webhook-logs"));
 
 webhookLogsRouter.get("/", async (req, res, next) => {
   try {

@@ -22,13 +22,16 @@ import { usePathname } from "next/navigation"
 import Link from "next/link"
 import {
   Sun, Moon, LayoutDashboardIcon, UsersIcon, BarChart3Icon,
+  BanknoteIcon, CrownIcon,
   RefreshCwIcon, StethoscopeIcon, DatabaseIcon,
   ClipboardListIcon, WebhookIcon, UserCogIcon,
-  Activity, HeadphonesIcon, MegaphoneIcon,
-  ContactRoundIcon,
+  Activity as ActivityIcon, HeadphonesIcon, MegaphoneIcon,
+  ContactRoundIcon, ShieldIcon, GemIcon, GitBranchIcon, FileSpreadsheetIcon,
+  HeartHandshakeIcon,
 } from "lucide-react"
 
 import { useAuth } from "@/stores/auth.store"
+import { SECTIONS, type SectionDef } from "@/lib/permissions"
 import { toPersianNum } from "@/components/leads/constants"
 import type { LucideIcon } from "lucide-react"
 
@@ -59,34 +62,81 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     return () => { active = false; clearInterval(t) }
   }, [user])
 
-  const navItems: NavItem[] = [
-    ...(hasPermission("dashboard") ? [{ title: "داشبورد", url: "/dashboard", icon: LayoutDashboardIcon }] : []),
-    ...(hasPermission("patients") || hasPermission("patients.view") ? [{ title: "بیماران", url: "/patients", icon: StethoscopeIcon }] : []),
-    ...(hasPermission("leads") ? [{ title: "لیدها", url: "/leads", icon: UsersIcon, badge: counts?.newUnassigned }] : []),
-    ...(hasPermission("leads") ? [{ title: "لیدهای من", url: "/my-leads", icon: HeadphonesIcon, badge: counts?.myOverdueFollowUps, badgeTone: "warning" as const }] : []),
-    ...(hasPermission("leads") ? [{ title: "کمپین‌ها", url: "/campaigns", icon: MegaphoneIcon }] : []),
-  ]
+  /**
+   * Icons and badges live here; which rows exist and what each one requires
+   * lives in @/lib/permissions, shared with the route guard in the dashboard
+   * layout. Keeping one list means a row can never be visible for a page the
+   * guard would refuse — or hidden for one it would allow.
+   */
+  const icons: Record<string, LucideIcon> = {
+    "/dashboard": LayoutDashboardIcon,
+    "/patients": StethoscopeIcon,
+    "/leads": UsersIcon,
+    "/my-leads": HeadphonesIcon,
+    "/campaigns": MegaphoneIcon,
+    "/crm-desk": HeartHandshakeIcon,
+    "/crm": ContactRoundIcon,
+    "/analytics": BarChart3Icon,
+    "/analytics/medical": ActivityIcon,
+    "/financial": BanknoteIcon,
+    "/financial/patients": CrownIcon,
+    "/tiers": GemIcon,
+    "/reports/doctors": FileSpreadsheetIcon,
+    "/reports/referrals": GitBranchIcon,
+    "/sync": RefreshCwIcon,
+    "/settings/external-migration": DatabaseIcon,
+    "/settings/leads-log": ClipboardListIcon,
+    "/settings/leads-bank": DatabaseIcon,
+    "/settings/webhook-logs": WebhookIcon,
+    "/settings/users": UserCogIcon,
+    "/settings/login-log": ShieldIcon,
+  }
 
-  const analysisItems: NavItem[] = [
-    ...(hasPermission("crm") ? [{ title: "CRM", url: "/crm", icon: ContactRoundIcon }] : []),
-    ...(hasPermission("analytics") ? [{ title: "تحلیل‌ها", url: "/analytics", icon: BarChart3Icon }] : []),
-    ...(hasPermission("analytics") ? [{ title: "تحلیل‌های پزشکی", url: "/analytics/medical", icon: Activity }] : []),
-  ]
+  const badges: Record<string, { badge?: number; badgeTone?: NavItem["badgeTone"] }> = {
+    "/leads": { badge: counts?.newUnassigned },
+    "/my-leads": { badge: counts?.myOverdueFollowUps, badgeTone: "warning" },
+  }
 
-  const settingsItems: NavItem[] = [
-    ...(hasPermission("sync") ? [{ title: "سینک CRM", url: "/sync", icon: RefreshCwIcon }] : []),
-    ...(hasPermission("settings") ? [
-      { title: "ورودی خارجی", url: "/settings/external-migration", icon: DatabaseIcon },
-      { title: "لاگ ورودی‌ها", url: "/settings/leads-log", icon: ClipboardListIcon },
-      { title: "بانک لیدها", url: "/settings/leads-bank", icon: DatabaseIcon },
-      { title: "لاگ وب‌هوک", url: "/settings/webhook-logs", icon: WebhookIcon },
-    ] : []),
-    ...(hasPermission("settings.users") || hasPermission("settings.roles")
-      ? [{ title: "کاربران و نقش‌ها", url: "/settings/users", icon: UserCogIcon }]
-      : []),
-  ]
+  // Rows without an icon are pages that exist but are not meant to appear in
+  // the sidebar (drill-down views), so they are skipped rather than defaulted.
+  const rowsFor = (group: SectionDef["group"]): NavItem[] =>
+    SECTIONS.filter((s) => s.group === group && s.anyOf.some(hasPermission) && icons[s.url]).map(
+      (s) => ({ title: s.title, url: s.url, icon: icons[s.url]!, ...badges[s.url] }),
+    )
 
-  const isActive = (url: string) => pathname === url || pathname.startsWith(url + "/")
+  const navItems = rowsFor("main")
+  const analysisItems = rowsFor("analysis")
+  const settingsItems = rowsFor("settings")
+
+  /**
+   * Only the most specific matching item is active.
+   *
+   * A plain prefix test lit up both `/financial` and `/financial/patients` at
+   * once (and likewise `/analytics` with its children), so two rows looked
+   * selected. Picking the longest matching url leaves exactly one.
+   */
+  const activeUrl =
+    [...navItems, ...analysisItems, ...settingsItems]
+      .map((i) => i.url)
+      .filter((url) => pathname === url || pathname.startsWith(url + "/"))
+      .sort((a, b) => b.length - a.length)[0] ?? null
+
+  const isActive = (url: string) => url === activeUrl
+
+  /**
+   * One place for nav row styling so the three groups cannot drift apart.
+   * The active row gets a start-edge marker and a slight lift, which reads as
+   * "selected" far faster than a background tint alone.
+   */
+  const navButtonClass = (url: string) =>
+    [
+      "h-11 gap-3 rounded-lg px-3 text-[0.95rem] transition-all",
+      "hover:bg-sidebar-accent/60",
+      "group-data-[collapsible=icon]:!h-11 group-data-[collapsible=icon]:!px-0",
+      isActive(url)
+        ? "relative bg-sidebar-accent font-semibold text-sidebar-accent-foreground shadow-sm before:absolute before:inset-y-2 before:start-0 before:w-1 before:rounded-full before:bg-primary"
+        : "text-sidebar-foreground/80",
+    ].join(" ")
 
   if (!user) return null
 
@@ -98,7 +148,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
         {navItems.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>منو اصلی</SidebarGroupLabel>
+            <SidebarGroupLabel className="text-[0.7rem] font-semibold tracking-wide text-sidebar-foreground/50">منو اصلی</SidebarGroupLabel>
             <SidebarMenu>
               {navItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
@@ -106,9 +156,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     tooltip={item.title}
                     render={<Link href={item.url} />}
                     data-active={isActive(item.url)}
-                    className={isActive(item.url) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : ""}
+                    className={navButtonClass(item.url)}
                   >
-                    <item.icon className="size-4" />
+                    <item.icon className="size-[1.15rem] shrink-0" />
                     <span className="flex-1">{item.title}</span>
                     {item.badge ? (
                       <span
@@ -130,7 +180,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         )}
         {analysisItems.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>تحلیل‌ها</SidebarGroupLabel>
+            <SidebarGroupLabel className="text-[0.7rem] font-semibold tracking-wide text-sidebar-foreground/50">تحلیل‌ها</SidebarGroupLabel>
             <SidebarMenu>
               {analysisItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
@@ -138,9 +188,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     tooltip={item.title}
                     render={<Link href={item.url} />}
                     data-active={isActive(item.url)}
-                    className={isActive(item.url) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : ""}
+                    className={navButtonClass(item.url)}
                   >
-                    <item.icon className="size-4" />
+                    <item.icon className="size-[1.15rem] shrink-0" />
                     <span>{item.title}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -150,7 +200,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         )}
         {settingsItems.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>تنظیمات</SidebarGroupLabel>
+            <SidebarGroupLabel className="text-[0.7rem] font-semibold tracking-wide text-sidebar-foreground/50">تنظیمات</SidebarGroupLabel>
             <SidebarMenu>
               {settingsItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
@@ -158,9 +208,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     tooltip={item.title}
                     render={<Link href={item.url} />}
                     data-active={isActive(item.url)}
-                    className={isActive(item.url) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : ""}
+                    className={navButtonClass(item.url)}
                   >
-                    <item.icon className="size-4" />
+                    <item.icon className="size-[1.15rem] shrink-0" />
                     <span>{item.title}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

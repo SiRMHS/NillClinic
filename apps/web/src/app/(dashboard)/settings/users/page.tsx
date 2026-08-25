@@ -30,6 +30,7 @@ import {
   EyeIcon, EyeOffIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useAuth } from "@/stores/auth.store"
 
 interface Role {
   id: string
@@ -53,6 +54,7 @@ interface Permission {
   key: string
   label: string
   group: string
+  hint?: string
 }
 
 function toPersianNum(num: number | string) {
@@ -60,6 +62,12 @@ function toPersianNum(num: number | string) {
 }
 
 export default function UsersManagementPage() {
+  const hasPermission = useAuth((s) => s.hasPermission)
+  // The two tabs are separately grantable: a role can be allowed to manage
+  // users without being allowed to redefine what a role may see.
+  const canManageUsers = hasPermission("settings.users")
+  const canManageRoles = hasPermission("settings.roles")
+
   const [users, setUsers] = useState<User[]>([])
   const [roles, setRoles] = useState<Role[]>([])
   const [permissions, setPermissions] = useState<Permission[]>([])
@@ -68,7 +76,7 @@ export default function UsersManagementPage() {
   const loadData = useCallback(async () => {
     try {
       const [u, r, p] = await Promise.all([
-        apiFetch<User[]>("/api/admin/users"),
+        canManageUsers ? apiFetch<User[]>("/api/admin/users") : [],
         apiFetch<Role[]>("/api/admin/roles"),
         apiFetch<Permission[]>("/api/admin/permissions"),
       ])
@@ -80,7 +88,7 @@ export default function UsersManagementPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [canManageUsers])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -106,34 +114,42 @@ export default function UsersManagementPage() {
           <Loader2Icon className="size-8 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <Tabs defaultValue="users">
+        <Tabs defaultValue={canManageUsers ? "users" : "roles"}>
           <TabsList className="mb-4">
-            <TabsTrigger value="users" className="flex items-center gap-2">
-              <UsersIcon className="size-4" />
-              کاربران
-            </TabsTrigger>
-            <TabsTrigger value="roles" className="flex items-center gap-2">
-              <ShieldIcon className="size-4" />
-              نقش‌ها
-            </TabsTrigger>
+            {canManageUsers && (
+              <TabsTrigger value="users" className="flex items-center gap-2">
+                <UsersIcon className="size-4" />
+                کاربران
+              </TabsTrigger>
+            )}
+            {canManageRoles && (
+              <TabsTrigger value="roles" className="flex items-center gap-2">
+                <ShieldIcon className="size-4" />
+                نقش‌ها
+              </TabsTrigger>
+            )}
           </TabsList>
 
-          <TabsContent value="users">
-            <UsersTab
-              users={users}
-              roles={roles}
-              onRefresh={loadData}
-            />
-          </TabsContent>
+          {canManageUsers && (
+            <TabsContent value="users">
+              <UsersTab
+                users={users}
+                roles={roles}
+                onRefresh={loadData}
+              />
+            </TabsContent>
+          )}
 
-          <TabsContent value="roles">
-            <RolesTab
-              roles={roles}
-              permissions={groupedPermissions}
-              allPermissions={permissions}
-              onRefresh={loadData}
-            />
-          </TabsContent>
+          {canManageRoles && (
+            <TabsContent value="roles">
+              <RolesTab
+                roles={roles}
+                permissions={groupedPermissions}
+                allPermissions={permissions}
+                onRefresh={loadData}
+              />
+            </TabsContent>
+          )}
         </Tabs>
       )}
     </div>
@@ -318,9 +334,13 @@ function UserDialog({
           <div className="space-y-2">
             <Label>رمز عبور {isEdit && "(خالی بگذارید تا تغییر نکند)"}</Label>
             <div className="relative">
+              {/* Physical side + matching padding, same reason as the login
+                  form: the field is LTR inside an RTL page, and without the
+                  reserved space the typed password runs under the icon. */}
               <Input
                 type={showPassword ? "text" : "password"}
                 dir="ltr"
+                className="pr-10 text-left"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder={isEdit ? "رمز عبور جدید" : "حداقل ۸ کاراکتر"}
@@ -329,7 +349,8 @@ function UserDialog({
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label={showPassword ? "پنهان کردن رمز" : "نمایش رمز"}
                 tabIndex={-1}
               >
                 {showPassword ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
@@ -499,6 +520,19 @@ function RoleDialog({
     )
   }
 
+  const toggleGroup = (perms: Permission[]) => {
+    const keys = perms.map((p) => p.key)
+    const allOn = keys.every((k) => selectedPerms.includes(k))
+    setSelectedPerms((prev) =>
+      allOn ? prev.filter((p) => !keys.includes(p)) : [...new Set([...prev, ...keys])]
+    )
+  }
+
+  // A role holding "*" is the seeded superadmin: the API refuses to store the
+  // wildcard, so its checkboxes are shown read-only rather than as a form that
+  // would silently downgrade it on save.
+  const isSuperAdminRole = role?.permissions.includes("*") === true
+
   const handleSave = async () => {
     if (!name || !label) return
     setSaving(true)
@@ -506,7 +540,12 @@ function RoleDialog({
       if (role) {
         await apiFetch(`/api/admin/roles/${role.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ label, description, permissions: selectedPerms }),
+          body: JSON.stringify({
+            label,
+            description,
+            // Leave the wildcard untouched — the API rejects "*" as an input.
+            ...(isSuperAdminRole ? {} : { permissions: selectedPerms }),
+          }),
         })
         toast.success("نقش ویرایش شد")
       } else {
@@ -532,7 +571,7 @@ function RoleDialog({
           {children}
         </div>
       )}
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{role ? "ویرایش نقش" : "نقش جدید"}</DialogTitle>
           <DialogDescription>
@@ -556,29 +595,61 @@ function RoleDialog({
           </div>
           <div className="space-y-2">
             <Label>دسترسی‌ها</Label>
-            <div className="border rounded-lg p-4 space-y-4 max-h-60 overflow-y-auto">
-              {Object.entries(groupedPermissions).map(([group, perms]) => (
-                <div key={group}>
-                  <h4 className="text-sm font-medium text-muted-foreground mb-2">{group}</h4>
-                  <div className="grid grid-cols-2 gap-2">
-                    {perms.map((perm) => (
-                      <label
-                        key={perm.key}
-                        className={`flex items-center gap-2 p-2 rounded-md cursor-pointer text-sm transition-colors
-                          ${selectedPerms.includes(perm.key) ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+            {isSuperAdminRole && (
+              <p className="rounded-md bg-violet-100 px-3 py-2 text-xs text-violet-700 dark:bg-violet-950 dark:text-violet-300">
+                این نقش دسترسی کامل دارد و همه بخش‌ها برایش باز است — قابل ویرایش نیست.
+              </p>
+            )}
+            <div className="border rounded-lg p-4 space-y-5 max-h-[22rem] overflow-y-auto">
+              {Object.entries(groupedPermissions).map(([group, perms]) => {
+                const selectedInGroup = perms.filter((p) => selectedPerms.includes(p.key)).length
+                return (
+                  <div key={group}>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-medium text-muted-foreground">
+                        {group}
+                        <span className="ms-2 text-xs tabular-nums">
+                          ({toPersianNum(selectedInGroup)}/{toPersianNum(perms.length)})
+                        </span>
+                      </h4>
+                      <button
+                        type="button"
+                        className="text-xs text-primary hover:underline disabled:opacity-50"
+                        disabled={isSuperAdminRole}
+                        onClick={() => toggleGroup(perms)}
                       >
-                        <input
-                          type="checkbox"
-                          className="size-4 rounded border-gray-300 text-primary focus:ring-primary"
-                          checked={selectedPerms.includes(perm.key)}
-                          onChange={() => togglePerm(perm.key)}
-                        />
-                        {perm.label}
-                      </label>
-                    ))}
+                        {selectedInGroup === perms.length ? "برداشتن همه" : "انتخاب همه"}
+                      </button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {perms.map((perm) => (
+                        <label
+                          key={perm.key}
+                          className={`flex items-start gap-2 p-2 rounded-md text-sm transition-colors
+                            ${isSuperAdminRole ? "opacity-60" : "cursor-pointer"}
+                            ${selectedPerms.includes(perm.key) ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 size-4 rounded border-gray-300 text-primary focus:ring-primary"
+                            checked={isSuperAdminRole || selectedPerms.includes(perm.key)}
+                            disabled={isSuperAdminRole}
+                            onChange={() => togglePerm(perm.key)}
+                          />
+                          <span className="flex flex-col">
+                            <span>{perm.label}</span>
+                            {perm.hint && (
+                              <span className="text-[11px] leading-tight text-muted-foreground">
+                                {perm.hint}
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>

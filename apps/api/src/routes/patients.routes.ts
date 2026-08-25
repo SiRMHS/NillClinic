@@ -2,8 +2,13 @@ import { Router } from "express";
 import { prisma, type Prisma } from "@jordan/db";
 import { z } from "zod";
 import { createEncryptFn, decrypt } from "../security/encryption.js";
+import { requireAnyPermission } from "../middleware/permission.middleware.js";
 
 export const patientsRouter = Router();
+
+// Either key opens the patient file; "patients" additionally covers the bulk
+// export the list page offers, which is checked where that route lives.
+patientsRouter.use(requireAnyPermission("patients", "patients.view"));
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

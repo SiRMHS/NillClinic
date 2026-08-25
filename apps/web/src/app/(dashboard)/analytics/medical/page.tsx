@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/table"
 import {
   Search, Stethoscope, Pill, TrendingUp, ArrowLeftRight,
-  Zap, Activity,
+  Zap, Activity, AlertTriangle,
 } from "lucide-react"
 import {
   Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale,
@@ -52,6 +52,14 @@ function toPersianNum(num: number | string) {
 
 export default function MedicalAnalyticsPage() {
   const [data, setData] = useState<MedicalMatrix | null>(null)
+  const [planCoverage, setPlanCoverage] = useState<{
+    plans: number
+    planPatients: number
+    billedPatients: number
+    coverageRate: number
+    oldestPlanDate: string | null
+    newestPlanDate: string | null
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedDiagnosis, setSelectedDiagnosis] = useState<string | null>(null)
   const [selectedTreatment, setSelectedTreatment] = useState<string | null>(null)
@@ -192,6 +200,31 @@ export default function MedicalAnalyticsPage() {
           بررسی ارتباط بین تشخیص‌ها و آیتم‌های درمانی
         </p>
       </div>
+
+      {/*
+        This page reads the treatment-plan table, which covers a small minority
+        of patients. Without saying so the charts look like a clinic-wide
+        clinical picture, which they are not.
+      */}
+      {planCoverage ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/40">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>
+            این تحلیل فقط بر پایه{" "}
+            <b>
+              {toPersianNum(planCoverage.plans.toLocaleString("en-US"))} طرح درمانی برای{" "}
+              {toPersianNum(planCoverage.planPatients.toLocaleString("en-US"))} بیمار
+            </b>{" "}
+            است — حدود{" "}
+            <b>{toPersianNum((planCoverage.coverageRate * 100).toFixed(1))}٪</b> از{" "}
+            {toPersianNum(planCoverage.billedPatients.toLocaleString("en-US"))} بیمار دارای سابقه
+            مالی، و محدود به بازه{" "}
+            {planCoverage.oldestPlanDate ? toPersianNum(planCoverage.oldestPlanDate) : "—"} تا{" "}
+            {planCoverage.newestPlanDate ? toPersianNum(planCoverage.newestPlanDate) : "—"}.
+            نماینده کل کلینیک نیست.
+          </span>
+        </div>
+      ) : null}
 
       {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-4">

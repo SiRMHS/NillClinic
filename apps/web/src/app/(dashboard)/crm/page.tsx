@@ -1,319 +1,630 @@
 "use client"
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
-import {
-  ArcElement,
-  BarElement,
-  CategoryScale,
-  Chart as ChartJS,
-  Legend,
-  LinearScale,
-  Tooltip,
-  type ChartOptions,
-} from "chart.js"
-import { Bar, Doughnut } from "react-chartjs-2"
-import {
-  BadgeCheck,
-  BriefcaseBusiness,
-  ContactRound,
-  MapPin,
-  Megaphone,
-  UsersRound,
-} from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
 import { apiFetch } from "@/lib/api-client"
+import { formatCount, formatPercent, formatRial, formatRialExact, toPersianNum } from "@/lib/format"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
+import { DateRangeFilter } from "@/components/ui/date-range-filter"
+import { SortableHead, useSortableRows } from "@/components/ui/sortable-table"
+import { PatientDetailDialog } from "@/components/patient-detail-dialog"
+import {
+  AlertTriangle, ArrowDownRight, ArrowUpRight, PhoneCall, RefreshCw,
+  Repeat, Stethoscope, TrendingUp, Users,
+} from "lucide-react"
 
-ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
-
-interface DistributionItem {
-  name: string
-  count: number
-  percent: number
+interface ServicePopularity {
+  serviceExternalId: number | null
+  serviceName: string
+  sectionName: string | null
+  kind: "consultation" | "procedure"
+  receptionCount: number
+  patientCount: number
+  revenue: number
+  averagePrice: number
+  share: number
 }
-
-interface PatientCrmAnalysis {
+interface ConversionSummary {
+  consultedPatients: number
+  convertedPatients: number
+  conversionRate: number
+  medianDaysToConvert: number | null
+  consultationLines: number
+  procedureLines: number
+  convertedRevenue: number
+  revenuePerConverted: number
+}
+interface ConversionByType {
+  consultationName: string
+  consultedPatients: number
+  convertedPatients: number
+  conversionRate: number
+  revenueAfter: number
+}
+interface DoctorRanking {
+  personnelName: string
+  revenue: number
+  patientCount: number
+  receptionCount: number
+  procedureLines: number
+  consultationLines: number
+  averageTicket: number
+  repeatPatientRate: number
+  conversionRate: number | null
+  revenueShare: number
+}
+interface RetentionSummary {
   totalPatients: number
-  generatedAt: string
-  genderDistribution: DistributionItem[]
-  residenceDistribution: DistributionItem[]
-  residentStatusDistribution: DistributionItem[]
-  introductionDistribution: DistributionItem[]
-  occupationDistribution: DistributionItem[]
+  returningPatients: number
+  returnRate: number
+  averageVisitsPerPatient: number
+  medianDaysBetweenVisits: number | null
+  singleVisitPatients: number
+}
+interface VisitFrequencyBucket {
+  visits: string
+  patientCount: number
+  revenue: number
+}
+interface FollowUpCandidate {
+  patientExternalCode: number
+  patientId: string | null
+  fullName: string | null
+  mobile: string | null
+  lastVisitDate: string | null
+  daysSinceLastVisit: number
+  visitCount: number
+  totalReceived: number
+  lastServices: string | null
+}
+interface Coverage {
+  oldestReceptionDate: string | null
+  newestReceptionDate: string | null
+  receptionCount: number
+  lineCount: number
+  syncComplete: boolean
+  syncCursorDate: string | null
 }
 
-const persianNumber = new Intl.NumberFormat("fa-IR")
-const chartColors = ["#7c3aed", "#06b6d4", "#f59e0b", "#10b981", "#f43f5e", "#6366f1", "#14b8a6", "#ec4899"]
-
-function ChartWrapper({ children, label }: { children: React.ReactNode; label: string }) {
-  const mounted = useSyncExternalStore(
-    () => () => {},
-    () => true,
-    () => false,
+function Stat({
+  label, value, hint, icon, tone,
+}: {
+  label: string
+  value: string
+  hint?: string
+  icon?: React.ReactNode
+  tone?: "positive" | "warning" | "danger"
+}) {
+  const toneClass =
+    tone === "positive" ? "text-emerald-600 dark:text-emerald-400"
+    : tone === "warning" ? "text-amber-600 dark:text-amber-400"
+    : tone === "danger" ? "text-rose-600 dark:text-rose-400"
+    : ""
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+        <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+        {icon ? <span className="text-muted-foreground">{icon}</span> : null}
+      </CardHeader>
+      <CardContent>
+        <div className={`text-2xl font-bold tabular-nums ${toneClass}`}>{value}</div>
+        {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
+      </CardContent>
+    </Card>
   )
-
-  if (!mounted) return <Skeleton className="h-full w-full rounded-xl" />
-  return <div className="relative h-full w-full min-w-0" role="img" aria-label={label}>{children}</div>
 }
 
-function recordedCount(items: DistributionItem[]): number {
-  return items
-    .filter((item) => item.name !== "ثبت نشده")
-    .reduce((sum, item) => sum + item.count, 0)
-}
-
-function percentOf(value: number, total: number): string {
-  if (total === 0) return "۰٪"
-  return `${new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 }).format((value / total) * 100)}٪`
-}
-
-function compactDistribution(
-  items: DistributionItem[],
-  maxItems: number,
-  remainderLabel: string,
-): DistributionItem[] {
-  if (items.length <= maxItems) return items
-
-  const visibleItems = items.slice(0, maxItems - 1)
-  const remainder = items.slice(maxItems - 1).reduce(
-    (totals, item) => ({
-      count: totals.count + item.count,
-      percent: totals.percent + item.percent,
-    }),
-    { count: 0, percent: 0 },
+/** Inline proportion bar — reads faster than a number alone in a dense table. */
+function RateBar({ value, tone = "emerald" }: { value: number; tone?: "emerald" | "amber" }) {
+  const pct = Math.max(0, Math.min(1, value)) * 100
+  return (
+    // inline-flex, not flex: a block-level flex box positions itself and
+    // ignores the cell's text alignment, so the bar drifted out from under its
+    // header (which is an inline-flex button obeying the same `text-left`).
+    <span className="inline-flex items-center gap-2 align-middle">
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+        <span
+          className={`block h-full ${tone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </span>
+      <span className="w-12 text-left tabular-nums">{formatPercent(value, 0)}</span>
+    </span>
   )
-
-  return [...visibleItems, { name: remainderLabel, ...remainder }]
 }
 
-export default function CrmPage() {
-  const [activeTab, setActiveTab] = useState("patients")
-  const [data, setData] = useState<PatientCrmAnalysis | null>(null)
+export default function VisitorAnalyticsPage() {
+  const [from, setFrom] = useState("")
+  const [to, setTo] = useState("")
+
+  const [coverage, setCoverage] = useState<Coverage | null>(null)
+  const [services, setServices] = useState<{ top: ServicePopularity[]; bottom: ServicePopularity[] } | null>(null)
+  const [conversion, setConversion] = useState<{ summary: ConversionSummary; byType: ConversionByType[] } | null>(null)
+  const [doctors, setDoctors] = useState<DoctorRanking[]>([])
+  const [retention, setRetention] = useState<{ summary: RetentionSummary; frequency: VisitFrequencyBucket[] } | null>(null)
+  const [followUp, setFollowUp] = useState<FollowUpCandidate[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [selected, setSelected] = useState<number | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    const qs = new URLSearchParams()
+    if (from) qs.set("from", from)
+    if (to) qs.set("to", to)
+    const range = qs.toString() ? `?${qs.toString()}` : ""
+    const withParam = (extra: string) => `${range ? `${range}&` : "?"}${extra}`
+
+    try {
+      const [cov, svc, conv, docs, ret, fu] = await Promise.all([
+        apiFetch<Coverage>("/api/visitors/coverage"),
+        apiFetch<{ top: ServicePopularity[]; bottom: ServicePopularity[] }>(
+          `/api/visitors/services${withParam("limit=10&kind=procedure")}`,
+        ),
+        apiFetch<{ summary: ConversionSummary; byType: ConversionByType[] }>(
+          `/api/visitors/conversion${range}`,
+        ),
+        apiFetch<DoctorRanking[]>(`/api/visitors/doctors${withParam("limit=30")}`),
+        apiFetch<{ summary: RetentionSummary; frequency: VisitFrequencyBucket[] }>(
+          `/api/visitors/retention${range}`,
+        ),
+        apiFetch<{ asOf: string; candidates: FollowUpCandidate[] }>(
+          "/api/visitors/follow-up?minDays=180&limit=100",
+        ),
+      ])
+      setCoverage(cov)
+      setServices(svc)
+      setConversion(conv)
+      setDoctors(docs)
+      setRetention(ret)
+      setFollowUp(fu.candidates)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "خطا در دریافت تحلیل مراجعین")
+    } finally {
+      setLoading(false)
+    }
+  }, [from, to])
 
   useEffect(() => {
-    let active = true
-    apiFetch<PatientCrmAnalysis>("/api/analytics/crm/patients")
-      .then((result) => {
-        if (active) setData(result)
-      })
-      .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : "دریافت تحلیل CRM ناموفق بود")
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => { active = false }
-  }, [])
+    void load()
+  }, [load])
 
-  const doughnutOptions = useMemo<ChartOptions<"doughnut">>(() => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    cutout: "62%",
-    plugins: {
-      legend: {
-        position: "bottom",
-        rtl: true,
-        labels: { usePointStyle: true, pointStyle: "circle", padding: 18, font: { family: "inherit", size: 12 } },
-      },
-      tooltip: { rtl: true, titleFont: { family: "inherit" }, bodyFont: { family: "inherit" } },
+  const docSort = useSortableRows(
+    doctors,
+    {
+      name: (r) => r.personnelName,
+      revenue: (r) => r.revenue,
+      share: (r) => r.revenueShare,
+      patients: (r) => r.patientCount,
+      avg: (r) => r.averageTicket,
+      repeat: (r) => r.repeatPatientRate,
+      conversion: (r) => r.conversionRate,
     },
-  }), [])
-
-  const horizontalBarOptions = useMemo<ChartOptions<"bar">>(() => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    indexAxis: "y",
-    plugins: {
-      legend: { display: false },
-      tooltip: { rtl: true, titleFont: { family: "inherit" }, bodyFont: { family: "inherit" } },
+    { key: "revenue", direction: "desc" },
+  )
+  const convSort = useSortableRows(
+    conversion?.byType ?? [],
+    {
+      name: (r) => r.consultationName,
+      consulted: (r) => r.consultedPatients,
+      converted: (r) => r.convertedPatients,
+      rate: (r) => r.conversionRate,
+      revenue: (r) => r.revenueAfter,
     },
-    scales: {
-      x: { beginAtZero: true, grid: { color: "rgba(148, 163, 184, 0.15)" }, ticks: { font: { family: "inherit" } } },
-      y: { grid: { display: false }, ticks: { font: { family: "inherit", size: 11 } } },
+    { key: "consulted", direction: "desc" },
+  )
+  const fuSort = useSortableRows(
+    followUp,
+    {
+      name: (r) => r.fullName,
+      days: (r) => r.daysSinceLastVisit,
+      visits: (r) => r.visitCount,
+      value: (r) => r.totalReceived,
     },
-  }), [])
+    { key: "value", direction: "desc" },
+  )
 
-  const occupationBarOptions = useMemo<ChartOptions<"bar">>(() => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    indexAxis: "y",
-    layout: { padding: { top: 8, right: 12, bottom: 8, left: 20 } },
-    datasets: { bar: { barThickness: 28, borderRadius: 8 } },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        rtl: true,
-        titleFont: { family: "inherit", size: 14 },
-        bodyFont: { family: "inherit", size: 14 },
-        padding: 12,
-      },
-    },
-    scales: {
-      x: {
-        beginAtZero: true,
-        grace: "6%",
-        grid: { color: "rgba(148, 163, 184, 0.18)" },
-        ticks: {
-          maxTicksLimit: 8,
-          padding: 8,
-          font: { family: "inherit", size: 13 },
-          callback: (value) => persianNumber.format(Number(value)),
-        },
-      },
-      y: {
-        grid: { display: false },
-        ticks: {
-          autoSkip: false,
-          padding: 10,
-          font: { family: "inherit", size: 14, weight: 500 },
-        },
-      },
-    },
-  }), [])
-
-  if (loading) {
-    return (
-      <div className="space-y-6" dir="rtl">
-        <Skeleton className="h-24 w-full" />
-        <div className="grid gap-4 md:grid-cols-4">{[1, 2, 3, 4].map((item) => <Skeleton key={item} className="h-28" />)}</div>
-        <div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-96" /><Skeleton className="h-96" /></div>
-      </div>
-    )
-  }
-
-  if (error || !data) {
-    return (
-      <Card dir="rtl">
-        <CardContent className="flex min-h-52 items-center justify-center text-destructive">
-          {error || "اطلاعات تحلیل در دسترس نیست"}
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const genderRecorded = recordedCount(data.genderDistribution)
-  const introductionRecorded = recordedCount(data.introductionDistribution)
-  const occupationRecorded = recordedCount(data.occupationDistribution)
-  const occupationChartItems = compactDistribution(data.occupationDistribution, 25, "سایر مشاغل")
-
-  const genderChart = {
-    labels: data.genderDistribution.map((item) => item.name),
-    datasets: [{ data: data.genderDistribution.map((item) => item.count), backgroundColor: chartColors, borderWidth: 0 }],
-  }
-  const residentChart = {
-    labels: data.residentStatusDistribution.map((item) => item.name),
-    datasets: [{ data: data.residentStatusDistribution.map((item) => item.count), backgroundColor: ["#10b981", "#06b6d4", "#94a3b8"], borderWidth: 0 }],
-  }
-  const introductionChart = {
-    labels: data.introductionDistribution.map((item) => item.name),
-    datasets: [{ data: data.introductionDistribution.map((item) => item.count), backgroundColor: "rgba(124, 58, 237, 0.82)", borderRadius: 7 }],
-  }
-  const residenceChart = {
-    labels: data.residenceDistribution.map((item) => item.name),
-    datasets: [{ data: data.residenceDistribution.map((item) => item.count), backgroundColor: "rgba(6, 182, 212, 0.82)", borderRadius: 7 }],
-  }
-  const occupationChart = {
-    labels: occupationChartItems.map((item) => item.name),
-    datasets: [{ data: occupationChartItems.map((item) => item.count), backgroundColor: "rgba(245, 158, 11, 0.82)", borderRadius: 7 }],
-  }
-
-  const stats = [
-    { label: "کل مراجعین", value: persianNumber.format(data.totalPatients), hint: "پرونده ثبت‌شده", icon: UsersRound, tone: "text-violet-600 bg-violet-500/10" },
-    { label: "اطلاعات جنسیت", value: percentOf(genderRecorded, data.totalPatients), hint: `${persianNumber.format(genderRecorded)} پرونده کامل`, icon: BadgeCheck, tone: "text-cyan-600 bg-cyan-500/10" },
-    { label: "نحوه آشنایی", value: percentOf(introductionRecorded, data.totalPatients), hint: `${persianNumber.format(introductionRecorded)} پاسخ ثبت‌شده`, icon: Megaphone, tone: "text-emerald-600 bg-emerald-500/10" },
-    { label: "اطلاعات شغلی", value: percentOf(occupationRecorded, data.totalPatients), hint: `${persianNumber.format(occupationRecorded)} عنوان ثبت‌شده`, icon: BriefcaseBusiness, tone: "text-amber-600 bg-amber-500/10" },
-  ]
+  const conv = conversion?.summary
+  const ret = retention?.summary
 
   return (
-    <div className="space-y-6" dir="rtl">
-      <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-l from-violet-600/10 via-background to-cyan-500/10 p-6">
-        <div className="relative z-10 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-          <div>
-            <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-              <ContactRound className="size-7 text-violet-600" />
-              CRM
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">داشبورد تحلیل و مدیریت مراجعین</p>
-          </div>
-          <div className="rounded-xl border bg-background/80 px-4 py-3 text-xs text-muted-foreground backdrop-blur">
-            آخرین محاسبه: {new Date(data.generatedAt).toLocaleString("fa-IR")}
-          </div>
+    <div className="flex flex-col gap-4 p-4 md:p-6" dir="rtl">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">تحلیل مراجعین</h1>
+          <p className="text-sm text-muted-foreground">
+            بر پایه پذیرش‌های واقعی — خدمات، نرخ تبدیل، عملکرد پزشکان و بازگشت بیمار
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <DateRangeFilter
+            value={{ from, to }}
+            onChange={(r) => {
+              setFrom(r.from)
+              setTo(r.to)
+            }}
+          />
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
+            بازخوانی
+          </Button>
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} dir="rtl">
-        <TabsList className="w-full justify-start rounded-xl p-1 group-data-horizontal/tabs:h-12 sm:w-fit">
-          <TabsTrigger value="patients" className="h-10 min-h-10 flex-none rounded-lg px-5">
-            <UsersRound className="size-4" />
-            تحلیل مراجعین
-          </TabsTrigger>
-        </TabsList>
+      {error ? (
+        <Card>
+          <CardContent className="py-6 text-center text-sm text-rose-600 dark:text-rose-400">{error}</CardContent>
+        </Card>
+      ) : null}
 
-        <TabsContent value="patients" className="space-y-5 pt-2">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {stats.map(({ label, value, hint, icon: Icon, tone }) => (
-              <Card key={label} className="overflow-hidden">
-                <CardContent className="flex items-center justify-between gap-4 p-5">
-                  <div>
-                    <p className="text-xs text-muted-foreground">{label}</p>
-                    <p className="mt-1 text-2xl font-bold">{value}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>
-                  </div>
-                  <div className={`rounded-2xl p-3 ${tone}`}><Icon className="size-6" /></div>
+      {coverage && !coverage.syncComplete ? (
+        <Card className="border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40">
+          <CardContent className="flex items-start gap-3 py-3 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <span className="font-medium">سینک پذیرش‌ها هنوز کامل نشده است</span> — اعداد زیر فقط
+              بازه‌ای را پوشش می‌دهند که تا الان سینک شده.
+              <div className="mt-1 text-xs text-muted-foreground">
+                {coverage.oldestReceptionDate ? toPersianNum(coverage.oldestReceptionDate) : "—"} تا{" "}
+                {coverage.newestReceptionDate ? toPersianNum(coverage.newestReceptionDate) : "—"} ·{" "}
+                {formatCount(coverage.receptionCount)} پذیرش ·{" "}
+                {formatCount(coverage.lineCount)} سطر خدمت
+                {coverage.syncCursorDate ? ` · سینک تا ${toPersianNum(coverage.syncCursorDate)}` : ""}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {loading && !conversion ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-28 w-full" />)}
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat
+              label="نرخ تبدیل"
+              value={conv ? formatPercent(conv.conversionRate) : "—"}
+              hint={conv ? `${formatCount(conv.convertedPatients)} از ${formatCount(conv.consultedPatients)} مراجع` : undefined}
+              icon={<TrendingUp className="size-4" />}
+              tone="positive"
+            />
+            <Stat
+              label="نرخ بازگشت"
+              value={ret ? formatPercent(ret.returnRate) : "—"}
+              hint={ret ? `${formatCount(ret.returningPatients)} بیمار بیش از یک بار آمده‌اند` : undefined}
+              icon={<Repeat className="size-4" />}
+            />
+            <Stat
+              label="میانگین فاصله مراجعه"
+              value={ret?.medianDaysBetweenVisits !== null && ret ? `${toPersianNum(ret.medianDaysBetweenVisits!)} روز` : "—"}
+              hint="میانه فاصله دو مراجعه متوالی"
+            />
+            <Stat
+              label="درآمد هر تبدیل"
+              value={conv ? formatRial(conv.revenuePerConverted) : "—"}
+              hint={conv ? `میانه ${toPersianNum(conv.medianDaysToConvert ?? 0)} روز تا اولین عمل` : undefined}
+            />
+            <Stat
+              label="کل مراجعین"
+              value={ret ? formatCount(ret.totalPatients) : "—"}
+              icon={<Users className="size-4" />}
+            />
+            <Stat
+              label="فقط یک بار آمده‌اند"
+              value={ret ? formatCount(ret.singleVisitPatients) : "—"}
+              hint={ret ? `${formatPercent(ret.totalPatients > 0 ? ret.singleVisitPatients / ret.totalPatients : 0)} از کل` : undefined}
+              tone="warning"
+            />
+            <Stat
+              label="میانگین مراجعه هر بیمار"
+              value={ret ? toPersianNum(ret.averageVisitsPerPatient.toFixed(1)) : "—"}
+            />
+            <Stat
+              label="نیازمند پیگیری"
+              value={formatCount(followUp.length)}
+              hint="بیش از ۶ ماه مراجعه نکرده‌اند"
+              icon={<PhoneCall className="size-4" />}
+              tone={followUp.length > 0 ? "warning" : undefined}
+            />
+          </div>
+
+          <Tabs defaultValue="services">
+            <TabsList>
+              <TabsTrigger value="services">خدمات</TabsTrigger>
+              <TabsTrigger value="conversion">نرخ تبدیل</TabsTrigger>
+              <TabsTrigger value="doctors">پزشکان</TabsTrigger>
+              <TabsTrigger value="retention">بازگشت</TabsTrigger>
+              <TabsTrigger value="followup">پیگیری</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="services">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <ArrowUpRight className="size-4 text-emerald-600" />
+                      ۱۰ خدمت پرطرفدار
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      ویزیت و مشاوره کنار گذاشته شده‌اند تا فهرست واقعاً درباره خدمات باشد
+                    </p>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <ServiceTable rows={services?.top ?? []} />
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <ArrowDownRight className="size-4 text-rose-600" />
+                      ۱۰ خدمت کم‌طرفدار
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      خدماتی که در این بازه انجام شده‌اند ولی کمترین تکرار را داشته‌اند
+                    </p>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <ServiceTable rows={services?.bottom ?? []} />
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="conversion">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">تبدیل مشاوره به عمل</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    بیمار وقتی «تبدیل‌شده» شمرده می‌شود که در روز مشاوره یا پس از آن، خدمت
+                    غیرمشاوره‌ای دریافت کرده باشد.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <SortableHead label="نوع مراجعه اولیه" sortKey="name" sort={convSort.sort} onSort={convSort.toggle} defaultDirection="asc" />
+                        <SortableHead label="مراجع" sortKey="consulted" sort={convSort.sort} onSort={convSort.toggle} align="left" />
+                        <SortableHead label="تبدیل‌شده" sortKey="converted" sort={convSort.sort} onSort={convSort.toggle} align="left" />
+                        <SortableHead label="نرخ تبدیل" sortKey="rate" sort={convSort.sort} onSort={convSort.toggle} align="left" />
+                        <SortableHead label="درآمد پس از آن" sortKey="revenue" sort={convSort.sort} onSort={convSort.toggle} align="left" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {convSort.sorted.map((t) => (
+                        <TableRow key={t.consultationName}>
+                          <TableCell className="font-medium">{t.consultationName}</TableCell>
+                          <TableCell className="text-left tabular-nums">{formatCount(t.consultedPatients)}</TableCell>
+                          <TableCell className="text-left tabular-nums">{formatCount(t.convertedPatients)}</TableCell>
+                          <TableCell className="text-left">
+                            <RateBar value={t.conversionRate} />
+                          </TableCell>
+                          <TableCell className="text-left tabular-nums" title={formatRialExact(t.revenueAfter)}>
+                            {formatRial(t.revenueAfter)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </CardContent>
               </Card>
-            ))}
-          </div>
+            </TabsContent>
 
-          <div className="grid gap-5 lg:grid-cols-2">
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><UsersRound className="size-4 text-violet-600" />ترکیب جنسیتی مراجعین</CardTitle></CardHeader>
-              <CardContent className="h-80"><ChartWrapper label="نمودار ترکیب جنسیتی"><Doughnut data={genderChart} options={doughnutOptions} /></ChartWrapper></CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><BadgeCheck className="size-4 text-emerald-600" />وضعیت اقامت</CardTitle></CardHeader>
-              <CardContent className="h-80"><ChartWrapper label="نمودار وضعیت اقامت"><Doughnut data={residentChart} options={doughnutOptions} /></ChartWrapper></CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Megaphone className="size-4 text-violet-600" />مراجعین چگونه با ما آشنا شده‌اند؟</CardTitle></CardHeader>
-            <CardContent className="h-[360px]"><ChartWrapper label="نمودار نحوه آشنایی"><Bar data={introductionChart} options={horizontalBarOptions} /></ChartWrapper></CardContent>
-          </Card>
-
-          <div className="space-y-5">
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><MapPin className="size-4 text-cyan-600" />محل اقامت مراجعین</CardTitle></CardHeader>
-              <CardContent className="max-h-[680px] overflow-y-auto">
-                <div style={{ height: `${Math.max(360, data.residenceDistribution.length * 34)}px` }}>
-                  <ChartWrapper label="نمودار محل اقامت"><Bar data={residenceChart} options={horizontalBarOptions} /></ChartWrapper>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base"><BriefcaseBusiness className="size-4 text-amber-600" />مشاغل مراجعین</CardTitle>
-                {data.occupationDistribution.length > occupationChartItems.length && (
+            <TabsContent value="doctors">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Stethoscope className="size-4" />
+                    رتبه‌بندی پزشکان و پرسنل
+                  </CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    نمایش ۲۴ شغل پرتکرار؛ {persianNumber.format(data.occupationDistribution.length - 24)} عنوان دیگر در «سایر مشاغل» تجمیع شده‌اند.
+                    بر پایه نتیجه، نه صرفاً تعداد: درآمد، بیمار یکتا، نرخ بازگشت بیماران و نرخ تبدیل
                   </p>
-                )}
-              </CardHeader>
-              <CardContent className="max-h-[960px] overflow-auto pb-6">
-                <div
-                  className="relative min-w-[900px] w-full"
-                  style={{ height: `${Math.max(620, occupationChartItems.length * 52)}px` }}
-                >
-                  <ChartWrapper label="نمودار مشاغل"><Bar data={occupationChart} options={occupationBarOptions} /></ChartWrapper>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-      </Tabs>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-10">#</TableHead>
+                        <SortableHead label="نام" sortKey="name" sort={docSort.sort} onSort={docSort.toggle} defaultDirection="asc" />
+                        <SortableHead label="درآمد" sortKey="revenue" sort={docSort.sort} onSort={docSort.toggle} align="left" />
+                        <SortableHead label="سهم" sortKey="share" sort={docSort.sort} onSort={docSort.toggle} align="left" />
+                        <SortableHead label="بیماران" sortKey="patients" sort={docSort.sort} onSort={docSort.toggle} align="left" />
+                        <SortableHead label="میانگین" sortKey="avg" sort={docSort.sort} onSort={docSort.toggle} align="left" />
+                        <SortableHead label="بازگشت بیمار" sortKey="repeat" sort={docSort.sort} onSort={docSort.toggle} align="left" />
+                        <SortableHead label="نرخ تبدیل" sortKey="conversion" sort={docSort.sort} onSort={docSort.toggle} align="left" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {docSort.sorted.map((d, i) => (
+                        <TableRow key={d.personnelName}>
+                          <TableCell className="text-muted-foreground tabular-nums">{toPersianNum(i + 1)}</TableCell>
+                          <TableCell className="font-medium">{d.personnelName}</TableCell>
+                          <TableCell className="text-left tabular-nums" title={formatRialExact(d.revenue)}>
+                            {formatRial(d.revenue)}
+                          </TableCell>
+                          <TableCell className="text-left tabular-nums">{formatPercent(d.revenueShare, 0)}</TableCell>
+                          <TableCell className="text-left tabular-nums">{formatCount(d.patientCount)}</TableCell>
+                          <TableCell className="text-left tabular-nums">{formatRial(d.averageTicket)}</TableCell>
+                          <TableCell className="text-left"><RateBar value={d.repeatPatientRate} /></TableCell>
+                          <TableCell className="text-left">
+                            {d.conversionRate === null ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <RateBar value={d.conversionRate} tone="amber" />
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="retention">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">توزیع تعداد مراجعه</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    چند بیمار چند بار آمده‌اند و هر گروه چقدر درآمد ساخته‌اند
+                  </p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>تعداد مراجعه</TableHead>
+                        <TableHead className="text-left">بیماران</TableHead>
+                        <TableHead className="text-left">سهم بیماران</TableHead>
+                        <TableHead className="text-left">درآمد</TableHead>
+                        <TableHead className="text-left">سهم درآمد</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(() => {
+                        const buckets = retention?.frequency ?? []
+                        const totalPatients = buckets.reduce((s, b) => s + b.patientCount, 0)
+                        const totalRevenue = buckets.reduce((s, b) => s + b.revenue, 0)
+                        return buckets.map((b) => (
+                          <TableRow key={b.visits}>
+                            <TableCell className="font-medium tabular-nums">{b.visits}</TableCell>
+                            <TableCell className="text-left tabular-nums">{formatCount(b.patientCount)}</TableCell>
+                            <TableCell className="text-left">
+                              <RateBar value={totalPatients > 0 ? b.patientCount / totalPatients : 0} />
+                            </TableCell>
+                            <TableCell className="text-left tabular-nums" title={formatRialExact(b.revenue)}>
+                              {formatRial(b.revenue)}
+                            </TableCell>
+                            <TableCell className="text-left">
+                              <RateBar value={totalRevenue > 0 ? b.revenue / totalRevenue : 0} tone="amber" />
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      })()}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="followup">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <PhoneCall className="size-4" />
+                    بیماران نیازمند پیگیری
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    خدمت پولی گرفته‌اند، بیش از ۶ ماه نیامده‌اند، و بر اساس ارزششان مرتب شده‌اند
+                  </p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {followUp.length === 0 ? (
+                    <div className="py-10 text-center text-sm text-muted-foreground">
+                      بیماری در این بازه برای پیگیری یافت نشد.
+                      {coverage && !coverage.syncComplete
+                        ? " تا کامل شدن سینک پذیرش‌ها این فهرست ناقص است."
+                        : ""}
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <SortableHead label="بیمار" sortKey="name" sort={fuSort.sort} onSort={fuSort.toggle} defaultDirection="asc" />
+                          <TableHead>آخرین خدمات</TableHead>
+                          <SortableHead label="آخرین مراجعه" sortKey="days" sort={fuSort.sort} onSort={fuSort.toggle} align="left" />
+                          <SortableHead label="مراجعه" sortKey="visits" sort={fuSort.sort} onSort={fuSort.toggle} align="left" />
+                          <SortableHead label="ارزش" sortKey="value" sort={fuSort.sort} onSort={fuSort.toggle} align="left" />
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {fuSort.sorted.map((c) => (
+                          <TableRow
+                            key={c.patientExternalCode}
+                            className="cursor-pointer"
+                            onClick={() => setSelected(c.patientExternalCode)}
+                            title="مشاهده پرونده بیمار"
+                          >
+                            <TableCell>
+                              <div className="font-medium">{c.fullName ?? "—"}</div>
+                              <div className="text-xs text-muted-foreground tabular-nums">
+                                {c.mobile ? toPersianNum(c.mobile) : "—"}
+                              </div>
+                            </TableCell>
+                            <TableCell className="max-w-[20rem] text-xs">{c.lastServices ?? "—"}</TableCell>
+                            <TableCell className="text-left">
+                              <div className="tabular-nums">{c.lastVisitDate ? toPersianNum(c.lastVisitDate) : "—"}</div>
+                              <Badge variant="secondary" className="mt-1">
+                                {toPersianNum(Math.round(c.daysSinceLastVisit / 30))} ماه پیش
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-left tabular-nums">{toPersianNum(c.visitCount)}</TableCell>
+                            <TableCell className="text-left tabular-nums" title={formatRialExact(c.totalReceived)}>
+                              {formatRial(c.totalReceived)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </>
+      )}
+
+      <PatientDetailDialog
+        externalCode={selected}
+        open={selected !== null}
+        onOpenChange={(o) => { if (!o) setSelected(null) }}
+      />
     </div>
+  )
+}
+
+function ServiceTable({ rows }: { rows: ServicePopularity[] }) {
+  if (rows.length === 0) {
+    return <div className="py-8 text-center text-sm text-muted-foreground">داده‌ای موجود نیست.</div>
+  }
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead className="w-10">#</TableHead>
+          <TableHead>خدمت</TableHead>
+          <TableHead className="text-left">دفعات</TableHead>
+          <TableHead className="text-left">بیماران</TableHead>
+          <TableHead className="text-left">درآمد</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((s, i) => (
+          <TableRow key={`${s.serviceExternalId ?? "x"}-${s.serviceName}`}>
+            <TableCell className="text-muted-foreground tabular-nums">{toPersianNum(i + 1)}</TableCell>
+            <TableCell>
+              <div className="font-medium">{s.serviceName}</div>
+              {s.sectionName ? (
+                <div className="text-xs text-muted-foreground">{s.sectionName}</div>
+              ) : null}
+            </TableCell>
+            <TableCell className="text-left tabular-nums">{formatCount(s.receptionCount)}</TableCell>
+            <TableCell className="text-left tabular-nums">{formatCount(s.patientCount)}</TableCell>
+            <TableCell className="text-left tabular-nums" title={formatRialExact(s.revenue)}>
+              {formatRial(s.revenue)}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }

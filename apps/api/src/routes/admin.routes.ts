@@ -3,6 +3,12 @@ import { prisma } from "@jordan/db";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { createEncryptFn, decrypt } from "../security/encryption.js";
+import {
+  requirePermission,
+  requireAnyPermission,
+} from "../middleware/permission.middleware.js";
+import { invalidateAllIdentityCache } from "../middleware/auth.middleware.js";
+import { AVAILABLE_PERMISSIONS, ALL_PERMISSION_KEYS } from "../lib/permissions.js";
 
 export const adminRouter = Router();
 const encrypt = createEncryptFn();
@@ -23,22 +29,34 @@ const updateUserSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+/**
+ * Only keys the catalogue actually defines may be stored. Without this a typo
+ * in the UI silently creates a permission nothing ever checks, which looks
+ * granted in role management and denies in practice. `*` stays reserved for the
+ * seeded superadmin role and cannot be handed out through the API.
+ */
+const permissionKeySchema = z
+  .array(z.string())
+  .refine((keys) => keys.every((k) => ALL_PERMISSION_KEYS.includes(k)), {
+    message: "کلید دسترسی ناشناخته است",
+  });
+
 const createRoleSchema = z.object({
   name: z.string().min(2).max(50),
   label: z.string().min(1).max(100),
   description: z.string().optional(),
-  permissions: z.array(z.string()).default([]),
+  permissions: permissionKeySchema.default([]),
 });
 
 const updateRoleSchema = z.object({
   label: z.string().min(1).max(100).optional(),
   description: z.string().optional(),
-  permissions: z.array(z.string()).optional(),
+  permissions: permissionKeySchema.optional(),
 });
 
 // ─── Users ───
 
-adminRouter.get("/users", async (req, res, next) => {
+adminRouter.get("/users", requirePermission("settings.users"), async (req, res, next) => {
   try {
     const users = await prisma.user.findMany({
       include: { role: true },
@@ -61,7 +79,7 @@ adminRouter.get("/users", async (req, res, next) => {
   }
 });
 
-adminRouter.post("/users", async (req, res, next) => {
+adminRouter.post("/users", requirePermission("settings.users"), async (req, res, next) => {
   try {
     const body = createUserSchema.parse(req.body);
 
@@ -109,7 +127,7 @@ adminRouter.post("/users", async (req, res, next) => {
   }
 });
 
-adminRouter.patch("/users/:id", async (req, res, next) => {
+adminRouter.patch("/users/:id", requirePermission("settings.users"), async (req, res, next) => {
   try {
     const body = updateUserSchema.parse(req.body);
 
@@ -161,7 +179,7 @@ adminRouter.patch("/users/:id", async (req, res, next) => {
   }
 });
 
-adminRouter.delete("/users/:id", async (req, res, next) => {
+adminRouter.delete("/users/:id", requirePermission("settings.users"), async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!user) {
@@ -183,7 +201,7 @@ adminRouter.delete("/users/:id", async (req, res, next) => {
 
 // ─── Roles ───
 
-adminRouter.get("/roles", async (req, res, next) => {
+adminRouter.get("/roles", requireAnyPermission("settings.roles", "settings.users"), async (req, res, next) => {
   try {
     const roles = await prisma.role.findMany({
       include: { _count: { select: { users: true } } },
@@ -195,7 +213,7 @@ adminRouter.get("/roles", async (req, res, next) => {
   }
 });
 
-adminRouter.post("/roles", async (req, res, next) => {
+adminRouter.post("/roles", requirePermission("settings.roles"), async (req, res, next) => {
   try {
     const body = createRoleSchema.parse(req.body);
 
@@ -216,13 +234,16 @@ adminRouter.post("/roles", async (req, res, next) => {
   }
 });
 
-adminRouter.patch("/roles/:id", async (req, res, next) => {
+adminRouter.patch("/roles/:id", requirePermission("settings.roles"), async (req, res, next) => {
   try {
     const body = updateRoleSchema.parse(req.body);
     const role = await prisma.role.update({
       where: { id: req.params.id },
       data: body,
     });
+    // Sessions cache the permission list for up to 30s; clearing it here makes
+    // an access change take effect on the very next request instead.
+    invalidateAllIdentityCache();
     res.json(role);
   } catch (e) {
     if (e instanceof z.ZodError) {
@@ -233,7 +254,7 @@ adminRouter.patch("/roles/:id", async (req, res, next) => {
   }
 });
 
-adminRouter.delete("/roles/:id", async (req, res, next) => {
+adminRouter.delete("/roles/:id", requirePermission("settings.roles"), async (req, res, next) => {
   try {
     const userCount = await prisma.user.count({ where: { roleId: req.params.id } });
     if (userCount > 0) {
@@ -255,27 +276,13 @@ adminRouter.delete("/roles/:id", async (req, res, next) => {
 
 // ─── Permissions list ───
 
-export const AVAILABLE_PERMISSIONS = [
-  { key: "dashboard", label: "داشبورد", group: "اصلی" },
-  { key: "patients", label: "بیماران (مدیریت)", group: "بیماران" },
-  { key: "patients.view", label: "بیماران (مشاهده)", group: "بیماران" },
-  { key: "leads", label: "لیدها", group: "فروش" },
-  { key: "crm", label: "CRM (تحلیل مراجعین)", group: "گزارشات" },
-  { key: "analytics", label: "تحلیل‌ها", group: "گزارشات" },
-  { key: "settings", label: "تنظیمات", group: "سیستم" },
-  { key: "settings.users", label: "مدیریت کاربران", group: "سیستم" },
-  { key: "settings.roles", label: "مدیریت نقش‌ها", group: "سیستم" },
-  { key: "settings.webhook-logs", label: "لاگ وب‌هوک", group: "سیستم" },
-  { key: "settings.external-migration", label: "ورودی خارجی", group: "سیستم" },
-  { key: "settings.leads-log", label: "لاگ ورودی‌ها", group: "سیستم" },
-  { key: "settings.leads-bank", label: "بانک لیدها", group: "سیستم" },
-] as const;
+export { AVAILABLE_PERMISSIONS };
 
-adminRouter.get("/permissions", (_req, res) => {
+adminRouter.get("/permissions", requireAnyPermission("settings.roles", "settings.users"), (_req, res) => {
   res.json(AVAILABLE_PERMISSIONS);
 });
 
-adminRouter.get("/leads-bank", async (req, res, next) => {
+adminRouter.get("/leads-bank", requirePermission("settings.leads-bank"), async (req, res, next) => {
   try {
     const page = Math.max(1, Number(req.query.page ?? 1));
     const limit = Math.min(Math.max(1, Number(req.query.limit ?? 50)), 200);
