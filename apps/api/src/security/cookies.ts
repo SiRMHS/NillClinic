@@ -33,6 +33,27 @@ interface CookieOptions {
   maxAgeSeconds: number;
   /** false for the CSRF token, which the browser must be able to read. */
   httpOnly?: boolean;
+  /** Widens the cookie to sibling subdomains; see `csrfCookieDomain`. */
+  domain?: string;
+}
+
+/**
+ * Set when the dashboard and the API are on different hosts of one domain
+ * (`dash.example.com` calling `api.example.com`). Without it the CSRF cookie is
+ * host-only on the API's hostname: the browser still sends it — same site — but
+ * the dashboard's JavaScript cannot read it, so it cannot echo it back in the
+ * header and every state-changing request fails the double-submit check.
+ *
+ * Only the CSRF token is widened. The session cookie stays host-only on the
+ * API's hostname, so a widened scope never puts the session itself within reach
+ * of another subdomain; the CSRF token is not a credential and is meant to be
+ * readable anyway.
+ *
+ * Format: the shared suffix, e.g. `COOKIE_DOMAIN=.example.com`.
+ */
+function csrfCookieDomain(): string | undefined {
+  const domain = process.env.COOKIE_DOMAIN?.trim();
+  return domain ? domain : undefined;
 }
 
 /**
@@ -50,6 +71,7 @@ function serialize(name: string, value: string, opts: CookieOptions): string {
     `Max-Age=${opts.maxAgeSeconds}`,
     "SameSite=Lax",
   ];
+  if (opts.domain) parts.push(`Domain=${opts.domain}`);
   if (opts.httpOnly !== false) parts.push("HttpOnly");
   if (secure) parts.push("Secure");
   return parts.join("; ");
@@ -64,11 +86,50 @@ export function setAuthCookies(
     "Set-Cookie",
     // Readable by JS on purpose: the double-submit pattern needs the client to
     // echo this value back in a header.
-    serialize(CSRF_COOKIE, opts.csrfToken, { maxAgeSeconds: opts.maxAgeSeconds, httpOnly: false }),
+    serialize(CSRF_COOKIE, opts.csrfToken, {
+      maxAgeSeconds: opts.maxAgeSeconds,
+      httpOnly: false,
+      domain: csrfCookieDomain(),
+    }),
   );
+  dropHostOnlyCsrfCookie(res);
+}
+
+/**
+ * Deletes a host-only `jc_csrf` left over from before `COOKIE_DOMAIN` was set.
+ *
+ * It and the widened cookie are two distinct cookies with the same name, so the
+ * browser would send both and the server would compare the header against
+ * whichever came first — a mismatch the client has no way to see or fix.
+ */
+function dropHostOnlyCsrfCookie(res: Response): void {
+  if (!csrfCookieDomain()) return;
+  res.append("Set-Cookie", serialize(CSRF_COOKIE, "", { maxAgeSeconds: 0, httpOnly: false }));
+}
+
+/**
+ * Re-issues only the readable CSRF cookie, leaving the session cookie alone.
+ * Used by the token endpoint that lets a client recover when it cannot read
+ * the cookie itself (the API on a different host than the page, a cookie the
+ * browser declined to store) — the value handed back is the one the
+ * double-submit check will compare against.
+ */
+export function setCsrfCookie(res: Response, csrfToken: string, maxAgeSeconds: number): void {
+  res.append(
+    "Set-Cookie",
+    serialize(CSRF_COOKIE, csrfToken, { maxAgeSeconds, httpOnly: false, domain: csrfCookieDomain() }),
+  );
+  dropHostOnlyCsrfCookie(res);
 }
 
 export function clearAuthCookies(res: Response): void {
   res.append("Set-Cookie", serialize(SESSION_COOKIE, "", { maxAgeSeconds: 0 }));
+  // Both scopes: whichever of the two the browser is holding has to go.
   res.append("Set-Cookie", serialize(CSRF_COOKIE, "", { maxAgeSeconds: 0, httpOnly: false }));
+  if (csrfCookieDomain()) {
+    res.append(
+      "Set-Cookie",
+      serialize(CSRF_COOKIE, "", { maxAgeSeconds: 0, httpOnly: false, domain: csrfCookieDomain() }),
+    );
+  }
 }

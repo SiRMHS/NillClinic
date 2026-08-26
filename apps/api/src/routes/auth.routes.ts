@@ -4,7 +4,13 @@ import { z } from "zod";
 import { prisma } from "@jordan/db";
 import bcrypt from "bcryptjs";
 import { signJwt } from "../security/jwt.js";
-import { clearAuthCookies, setAuthCookies } from "../security/cookies.js";
+import {
+  CSRF_COOKIE,
+  clearAuthCookies,
+  readCookie,
+  setAuthCookies,
+  setCsrfCookie,
+} from "../security/cookies.js";
 import { requireAuth, invalidateTokenVersionCache } from "../middleware/auth.middleware.js";
 import { authRateLimit } from "../middleware/rate-limit.middleware.js";
 import { expandPermissions } from "../lib/permissions.js";
@@ -231,6 +237,27 @@ authRouter.post("/logout", requireAuth, async (req, res, next) => {
   } catch (e) {
     next(e);
   }
+});
+
+/**
+ * Hands the current CSRF token back to an authenticated client.
+ *
+ * The double-submit pattern normally has the page read the `jc_csrf` cookie
+ * itself, but that only works when the cookie is visible to the page's own
+ * JavaScript. When the API lives on a different host than the page — a
+ * sibling subdomain, say — the browser still *sends* the cookie (same site)
+ * while `document.cookie` cannot *read* it, and every state-changing request
+ * would fail the check with no way for the client to recover. This endpoint
+ * closes that gap: it is a safe method, requires the session cookie, and only
+ * ever discloses the token to the session that owns it.
+ */
+authRouter.get("/csrf", requireAuth, (req, res) => {
+  let csrfToken = readCookie(req, CSRF_COOKIE);
+  if (!csrfToken) {
+    csrfToken = randomBytes(32).toString("hex");
+    setCsrfCookie(res, csrfToken, SESSION_SECONDS);
+  }
+  res.json({ csrfToken });
 });
 
 authRouter.get("/me", requireAuth, async (req, res, next) => {

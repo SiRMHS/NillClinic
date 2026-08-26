@@ -2,6 +2,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
 
 const CSRF_COOKIE = "jc_csrf"
 const CSRF_HEADER = "X-CSRF-Token"
+const CSRF_STORAGE_KEY = "jc_csrf"
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"])
 
 /**
@@ -10,8 +11,18 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"])
  * token the way it could when this lived in localStorage. The trade-off is CSRF
  * exposure, answered by echoing the readable `jc_csrf` cookie back in a header
  * that a cross-site attacker cannot set.
+ *
+ * Reading the cookie is only the first source. When the API is served from a
+ * different host than this page (a sibling subdomain, or a separate API
+ * domain), the browser still sends the cookie while `document.cookie` cannot
+ * read it — every POST would then fail the server's check with no way out. So
+ * the token is also remembered from the login response and can be re-fetched
+ * from `/api/auth/csrf`, which returns the very value the server compares
+ * against.
  */
-function readCsrfToken(): string | null {
+let csrfToken: string | null = null
+
+function readCsrfCookie(): string | null {
   if (typeof document === "undefined") return null
   for (const part of document.cookie.split(";")) {
     const eq = part.indexOf("=")
@@ -20,6 +31,74 @@ function readCsrfToken(): string | null {
     return decodeURIComponent(part.slice(eq + 1).trim())
   }
   return null
+}
+
+/** Survives a page reload, so the fallback does not cost a request every time. */
+function readStoredCsrfToken(): string | null {
+  if (csrfToken) return csrfToken
+  if (typeof window === "undefined") return null
+  try {
+    csrfToken = window.localStorage.getItem(CSRF_STORAGE_KEY)
+  } catch {
+    // storage disabled (private mode, blocked cookies) — the memory copy and
+    // the /api/auth/csrf refresh still work
+  }
+  return csrfToken
+}
+
+export function storeCsrfToken(token: string | null): void {
+  csrfToken = token
+  if (typeof window === "undefined") return
+  try {
+    if (token) window.localStorage.setItem(CSRF_STORAGE_KEY, token)
+    else window.localStorage.removeItem(CSRF_STORAGE_KEY)
+  } catch {
+    // see readStoredCsrfToken
+  }
+}
+
+/** The cookie wins when readable: it is always current, the copy may be stale. */
+function currentCsrfToken(): string | null {
+  return readCsrfCookie() ?? readStoredCsrfToken()
+}
+
+/**
+ * Asks the API for the token tied to this session. Concurrent callers share
+ * one request so a page firing several mutations at once does not stampede.
+ */
+let csrfRefresh: Promise<string | null> | null = null
+function refreshCsrfToken(): Promise<string | null> {
+  csrfRefresh ??= fetch(`${API_BASE_URL}/api/auth/csrf`, { credentials: "include" })
+    .then((res) => (res.ok ? (res.json() as Promise<{ csrfToken?: string }>) : null))
+    .then((body) => {
+      const token = typeof body?.csrfToken === "string" ? body.csrfToken : null
+      // Only overwrite on success: a failed lookup (an expired session, the
+      // API unreachable) must not throw away a copy that still works.
+      if (token) storeCsrfToken(token)
+      // Prefer the cookie the response may have just set; it is what the
+      // server will compare against either way.
+      return readCsrfCookie() ?? token
+    })
+    .catch(() => null)
+    .finally(() => {
+      csrfRefresh = null
+    })
+  return csrfRefresh
+}
+
+/** Distinguishes the CSRF rejection from a plain permission denial. */
+async function isCsrfRejection(response: Response): Promise<boolean> {
+  try {
+    const body = (await response.clone().json()) as { error?: string }
+    return typeof body?.error === "string" && body.error.includes("CSRF")
+  } catch {
+    return false
+  }
+}
+
+/** A body we can hand to `fetch` a second time when a request has to be retried. */
+function isReplayableBody(body: BodyInit | null | undefined): boolean {
+  return body == null || typeof body === "string"
 }
 
 /**
@@ -43,12 +122,17 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json")
 
   const method = (options.method ?? "GET").toUpperCase()
-  if (!SAFE_METHODS.has(method)) {
-    const csrf = readCsrfToken()
+  const needsCsrf = !SAFE_METHODS.has(method)
+  if (needsCsrf) {
+    // Nothing to echo — ask the API rather than sending a request we know the
+    // double-submit check will reject. Login is the exception: there is no
+    // session yet, so the lookup could only ever come back empty.
+    const csrf =
+      currentCsrfToken() ?? (path.startsWith("/api/auth/login") ? null : await refreshCsrfToken())
     if (csrf) headers.set(CSRF_HEADER, csrf)
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  let response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
     // Required for the session cookie to travel cross-origin (web on :3000,
@@ -56,12 +140,36 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     credentials: "include",
   })
 
+  // A stale token — one left over from an earlier session, or a cookie the
+  // server rotated behind our back — is recoverable: fetch the current value
+  // and replay the request once. Only once, so a server that keeps rejecting
+  // cannot put us in a loop.
+  if (
+    response.status === 403 &&
+    needsCsrf &&
+    isReplayableBody(options.body) &&
+    (await isCsrfRejection(response))
+  ) {
+    const fresh = await refreshCsrfToken()
+    if (fresh && fresh !== headers.get(CSRF_HEADER)) {
+      headers.set(CSRF_HEADER, fresh)
+      response = await fetch(`${API_BASE_URL}${path}`, {
+        ...options,
+        headers,
+        credentials: "include",
+      })
+    }
+  }
+
   if (response.status === 401) {
     // An expired or revoked session must not leave the user staring at a page
     // that silently stops updating. Bounce to login, say why, and remember
     // where they were so they land back there after signing in.
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
       localStorage.removeItem("user")
+      // The token belonged to the session that just ended; keeping it would
+      // only feed a stale header into the next one.
+      storeCsrfToken(null)
 
       // Only claim a session ended if one actually did. Someone who was never
       // signed in gets no notice — telling them their session expired would be

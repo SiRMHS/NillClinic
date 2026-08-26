@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, storeCsrfToken } from "@/lib/api-client";
 
 export interface UserInfo {
   id: string;
@@ -47,6 +47,10 @@ export const useAuth = create<AuthState>((set, get) => ({
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
+    // Kept alongside the cookie: when the API is on a different host than this
+    // page the cookie is sent but unreadable here, and this copy is what lets
+    // state-changing requests carry the header at all.
+    storeCsrfToken(data.csrfToken);
     set({ user: data.user, isLoaded: true });
   },
 
@@ -54,6 +58,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     // Server-side logout bumps the user's token version, so any copy of the
     // token that leaked elsewhere stops working too.
     await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    storeCsrfToken(null);
     set({ user: null });
     if (typeof window !== "undefined") {
       localStorage.removeItem("user");
