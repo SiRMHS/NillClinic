@@ -4,6 +4,25 @@ import { CSRF_COOKIE, CSRF_HEADER, readCookie } from "../security/cookies.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+/**
+ * Kill switch, off by default. Set `CSRF_DISABLED=true` to let every
+ * state-changing request through unchecked.
+ *
+ * This is a temporary escape hatch for a deployment where the client cannot
+ * get the token to the server, not a setting to leave on: with it on, any page
+ * the signed-in user visits can act as them, because the browser attaches the
+ * session cookie on its own and the header that proves the request came from
+ * our own page is no longer required. Sibling subdomains count too — they are
+ * same-site, so `SameSite=Lax` does not hold them back either.
+ */
+const CSRF_DISABLED = process.env.CSRF_DISABLED === "true";
+if (CSRF_DISABLED) {
+  console.warn(
+    "[security] CSRF protection is DISABLED (CSRF_DISABLED=true). " +
+      "Every cookie-authenticated state-changing request is accepted unchecked.",
+  );
+}
+
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -25,6 +44,11 @@ function safeEqual(a: string, b: string): boolean {
  * Safe methods are exempt because they must not change state.
  */
 export function csrfProtection(req: Request, res: Response, next: NextFunction) {
+  if (CSRF_DISABLED) {
+    next();
+    return;
+  }
+
   if (SAFE_METHODS.has(req.method)) {
     next();
     return;

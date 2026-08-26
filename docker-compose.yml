@@ -57,6 +57,8 @@ services:
       # Only needed when the dashboard and the API are on different hosts of one
       # domain — widens the readable CSRF cookie so the dashboard can read it.
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      # Kill switch for the CSRF check. Temporary escape hatch only.
+      CSRF_DISABLED: ${CSRF_DISABLED:-}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
