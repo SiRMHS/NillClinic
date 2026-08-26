@@ -62,6 +62,7 @@ export const AVAILABLE_PERMISSIONS: PermissionDef[] = [
   { key: "settings.external-migration", label: "ورودی خارجی", group: "سیستم", hint: "بارگذاری داده از منابع بیرونی" },
   { key: "settings.leads-log", label: "لاگ ورودی‌ها", group: "سیستم", hint: "تاریخچه لیدهای دریافتی" },
   { key: "settings.leads-bank", label: "بانک لیدها", group: "سیستم", hint: "آرشیو کامل لیدهای خام" },
+  { key: "settings.telephony", label: "تنظیمات تلفن", group: "سیستم", hint: "نحوه شماره‌گیری دکمه تماس (Issabel، 3CX، سافت‌فون)" },
 ];
 
 export const ALL_PERMISSION_KEYS: string[] = AVAILABLE_PERMISSIONS.map((p) => p.key);

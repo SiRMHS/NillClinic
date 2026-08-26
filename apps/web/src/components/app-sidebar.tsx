@@ -27,7 +27,7 @@ import {
   ClipboardListIcon, WebhookIcon, UserCogIcon,
   Activity as ActivityIcon, HeadphonesIcon, MegaphoneIcon,
   ContactRoundIcon, ShieldIcon, GemIcon, GitBranchIcon, FileSpreadsheetIcon,
-  HeartHandshakeIcon,
+  HeartHandshakeIcon, PhoneIcon,
 } from "lucide-react"
 
 import { useAuth } from "@/stores/auth.store"
@@ -90,6 +90,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     "/settings/webhook-logs": WebhookIcon,
     "/settings/users": UserCogIcon,
     "/settings/login-log": ShieldIcon,
+    "/settings/telephony": PhoneIcon,
   }
 
   const badges: Record<string, { badge?: number; badgeTone?: NavItem["badgeTone"] }> = {

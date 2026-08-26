@@ -590,6 +590,52 @@ model SyncSettings {
   @@map("sync_settings")
 }
 
+/// How the "تماس" button on a lead hands the number to the phone system.
+///
+/// TEL/CALLTO/SIP are URI schemes any registered softphone picks up — which is
+/// what an Issabel/Asterisk desk running Zoiper or MicroSIP answers to. THREECX
+/// opens the 3CX web client on `pbxHost` instead, because the 3CX browser
+/// client is not registered as a URI handler. CUSTOM is the escape hatch for a
+/// dialer none of the above describes.
+enum DialMode {
+  TEL
+  CALLTO
+  SIP
+  THREECX
+  CUSTOM
+}
+
+/// Shape the number is rewritten into before it reaches the dialer. Trunks
+/// disagree: some want the number exactly as the lead gave it, others reject
+/// anything that is not E.164.
+enum DialNumberFormat {
+  AS_IS
+  NATIONAL
+  E164
+}
+
+/// Click-to-call configuration (single row, id = 1).
+///
+/// Lives in the database rather than in env because the clinic switches phone
+/// systems without a deploy, and the same build has to serve whichever one is
+/// on the desks that week.
+model TelephonySettings {
+  id           Int              @id @default(1)
+  dialMode     DialMode         @default(TEL) @map("dial_mode")
+  /// PBX host used by SIP and 3CX links, e.g. `pbx.clinic.ir`.
+  pbxHost      String?          @map("pbx_host")
+  /// CUSTOM mode only: a URL with `{number}` where the digits go.
+  linkTemplate String?          @map("link_template")
+  /// Dialed in front of the number, e.g. `9` for an outside line.
+  dialPrefix   String           @default("") @map("dial_prefix")
+  numberFormat DialNumberFormat @default(AS_IS) @map("number_format")
+  /// Country code (no `+`) used by the NATIONAL and E164 formats.
+  countryCode  String           @default("98") @map("country_code")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  @@map("telephony_settings")
+}
+
 model SyncLog {
   id              String      @id @default(cuid())
   entity          SyncEntity

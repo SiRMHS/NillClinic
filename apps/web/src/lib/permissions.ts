@@ -42,6 +42,7 @@ export const SECTIONS: SectionDef[] = [
   { url: "/settings/webhook-logs", title: "لاگ وب‌هوک", anyOf: ["settings.webhook-logs"], group: "settings" },
   { url: "/settings/users", title: "کاربران و نقش‌ها", anyOf: ["settings.users", "settings.roles"], group: "settings" },
   { url: "/settings/login-log", title: "گزارش ورود", anyOf: ["settings.login-log"], group: "settings" },
+  { url: "/settings/telephony", title: "تنظیمات تلفن", anyOf: ["settings.telephony"], group: "settings" },
 ]
 
 /**

@@ -18,6 +18,7 @@ import {
   callOutcomeConfig, callStatusConfig,
 } from "./constants"
 import { JalaliDateTimePicker } from "@/components/ui/jalali-date-picker"
+import { useDialLink } from "@/stores/telephony.store"
 import { jalaliToIso, offsetJalaliDate } from "@/lib/jalali-date"
 
 interface CallFlowDialogProps {
@@ -51,6 +52,8 @@ type Step = "status" | "outcome" | "service" | "appointment" | "followup"
 const noAnswerStatuses: CallStatus[] = ["NO_ANSWER", "BUSY", "VOICEMAIL", "WRONG_NUMBER"]
 
 export function CallFlowDialog({ lead, open, onOpenChange, onSubmit }: CallFlowDialogProps) {
+  const dialLink = useDialLink()
+  const dialHref = dialLink(lead?.mobile)
   const [step, setStep] = useState<Step>("status")
   const [callStatus, setCallStatus] = useState<CallStatus | null>(null)
   const [callOutcome, setCallOutcome] = useState<CallOutcome | null>(null)
@@ -213,9 +216,9 @@ export function CallFlowDialog({ lead, open, onOpenChange, onSubmit }: CallFlowD
                 {" · "}مرحله: {stepTitles[step]}
               </DialogDescription>
             </div>
-            {lead?.mobile && (
+            {dialHref && (
               <a
-                href={`tel:${lead.mobile.replace(/[\s\-()]/g, "")}`}
+                href={dialHref}
                 className={cn(buttonVariants({ size: "sm" }), "shrink-0 gap-1.5 inline-flex")}
               >
                 <PhoneCall className="size-4" />

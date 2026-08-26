@@ -16,6 +16,7 @@ import { adminRouter } from "./routes/admin.routes.js";
 import { webhookLogsRouter } from "./routes/webhook-logs.routes.js";
 import { securityRouter } from "./routes/security.routes.js";
 import { crmDeskRouter } from "./routes/crm-desk.routes.js";
+import { telephonyRouter } from "./routes/telephony.routes.js";
 import { requireAuth } from "./middleware/auth.middleware.js";
 import { csrfProtection } from "./middleware/csrf.middleware.js";
 import { apiRateLimit, webhookRateLimit } from "./middleware/rate-limit.middleware.js";
@@ -101,5 +102,6 @@ app.use("/api/admin", requireAuth, adminRouter);
 app.use("/api/webhook-logs", requireAuth, webhookLogsRouter);
 app.use("/api/security", requireAuth, securityRouter);
 app.use("/api/crm-desk", requireAuth, crmDeskRouter);
+app.use("/api/telephony", requireAuth, telephonyRouter);
 
 app.use(errorHandler);

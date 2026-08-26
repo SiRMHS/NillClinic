@@ -20,6 +20,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
 import { formatDateTime } from "@/lib/date-utils"
+import { useDialLink } from "@/stores/telephony.store"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import Link from "next/link"
@@ -518,6 +519,7 @@ function LeadDetail({
   onCampaignChange: (campaignId: string | null) => void
 }) {
   const SourceIcon = sourceIcons[lead.source]
+  const dialHref = useDialLink()(lead.mobile)
   const overdue = isFollowUpOverdue(lead.nextFollowUpAt) && lead.status !== "LOST" && lead.status !== "CONVERTED"
   const latestAppointment = lead.appointments[0]
 
@@ -538,9 +540,9 @@ function LeadDetail({
               </Badge>
             </div>
             <SheetDescription className="flex items-center gap-2 flex-wrap mt-1">
-              {lead.mobile ? (
+              {lead.mobile && dialHref ? (
                 <a
-                  href={`tel:${lead.mobile.replace(/[\s\-()]/g, "")}`}
+                  href={dialHref}
                   dir="ltr"
                   className="inline-flex items-center gap-1 text-xs hover:text-violet-600 transition"
                 >
