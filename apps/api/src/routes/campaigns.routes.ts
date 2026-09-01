@@ -6,6 +6,7 @@ import {
 } from "@jordan/shared";
 import { decrypt } from "../security/encryption.js";
 import { requirePermission } from "../middleware/permission.middleware.js";
+import { leadScope } from "../lib/lead-scope.js";
 
 export const campaignsRouter = Router();
 
@@ -204,9 +205,19 @@ campaignsRouter.get("/:idOrSlug/leads", async (req, res, next) => {
     const where: Prisma.LeadWhereInput = { campaignId: campaign.id };
     if (status) where.status = status as "NEW" | "CONTACTED" | "CONVERTED" | "LOST";
 
+    /**
+     * Same isolation as /api/leads, because this is the same data.
+     *
+     * `leads` implies `campaigns`, so without this an agent could read every
+     * lead in the clinic simply by asking for them a campaign at a time — the
+     * scoping on /api/leads would be a lock on one of two doors.
+     */
+    const scope = leadScope(req);
+    const scopedWhere: Prisma.LeadWhereInput = scope ? { AND: [where, scope] } : where;
+
     const take = Number(req.query.take ?? 100);
     const leads = await prisma.lead.findMany({
-      where,
+      where: scopedWhere,
       orderBy: { createdAt: "desc" },
       take: Math.min(Math.max(take, 1), 500),
       include: leadInclude,

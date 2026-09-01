@@ -509,6 +509,8 @@ export class VisitorAnalyticsService {
     const [patient] = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
       `SELECT p.id, p.external_code, p.full_name, p.mobile, p.gender, p.birth_date,
               p.job, p.introduction,
+              p.vip_flag::text AS vip_flag, p.vip_note, p.vip_set_at,
+              m.tier::text AS tier,
               m.visit_count, m.total_received::text AS total_received,
               m.total_discount::text AS total_discount,
               m.total_outstanding::text AS total_outstanding,
@@ -566,6 +568,13 @@ export class VisitorAnalyticsService {
         gender: patient.gender === null ? null : this.num(patient.gender),
         birthDate: patient.birth_date === null ? null : String(patient.birth_date),
         job: patient.job === null ? null : String(patient.job),
+        // Manual standing sits on the patient rather than in `metrics`: it is
+        // asserted by a person and survives every recompute, whereas everything
+        // under `metrics` is derived and rebuilt after each sync.
+        vipFlag: patient.vip_flag === null ? null : String(patient.vip_flag),
+        vipNote: patient.vip_note === null ? null : String(patient.vip_note),
+        vipSetAt: patient.vip_set_at === null ? null : new Date(patient.vip_set_at as string).toISOString(),
+        tier: patient.tier === null ? null : String(patient.tier),
       },
       metrics: patient.visit_count === null ? null : {
         visitCount: this.num(patient.visit_count),

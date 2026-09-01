@@ -19,7 +19,9 @@ import {
   PATIENT_TIER_LABELS,
   PATIENT_TIER_ORDER,
   TierBadge,
+  VipBadge,
   type PatientTier,
+  type PatientVipFlag,
 } from "@/components/tier-badge"
 import { toast } from "sonner"
 
@@ -47,6 +49,7 @@ interface RankedPatient {
   segmentLabel: string
   tier: PatientTier
   tierLabel: string
+  vipFlag: PatientVipFlag | null
 }
 
 interface Coverage {
@@ -390,7 +393,16 @@ function PatientRankingContent() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <TierBadge tier={p.tier} />
+                      {/*
+                        Both badges, not one: a flagged patient is PLATINUM by
+                        assignment rather than by spend, and showing only the
+                        tier would make the ranking look miscomputed next to
+                        their actual total.
+                      */}
+                      <div className="flex flex-wrap items-center gap-1">
+                        <TierBadge tier={p.tier} />
+                        <VipBadge flag={p.vipFlag} />
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Badge className={SEGMENT_TONE[p.segment]} title={SEGMENT_HINT[p.segment]}>

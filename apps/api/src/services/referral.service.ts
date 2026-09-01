@@ -107,7 +107,15 @@ export class ReferralService {
           COALESCE(SUM(ri.received_price), 0)                   AS treatment_received,
           MIN(ri.reception_date)                                AS first_treatment_date,
           MAX(ri.reception_date)                                AS last_treatment_date,
-          array_agg(DISTINCT btrim(split.raw))                  AS treating_doctors
+          array_agg(DISTINCT btrim(split.raw))                  AS treating_doctors,
+          -- What the handover actually consisted of. Without it the row says a
+          -- patient went to another doctor and paid, but not whether they got
+          -- the procedure the consultation was about — which is the clinical
+          -- half of the question. Trimmed to the ten most valuable services so
+          -- a decade-long patient does not produce an unreadable cell.
+          (array_agg(DISTINCT ri.service_name)
+             FILTER (WHERE ri.service_name IS NOT NULL AND ri.service_name <> '')
+          )[1:10]                                               AS treatment_services
         FROM reception_items ri
         JOIN consults c ON c.code = ri.patient_external_code
         LEFT JOIN LATERAL unnest(
@@ -149,7 +157,8 @@ export class ReferralService {
           t.treatment_received,
           t.first_treatment_date,
           t.last_treatment_date,
-          t.treating_doctors
+          t.treating_doctors,
+          t.treatment_services
         FROM consults c
         JOIN treatments t      ON t.code = c.code
         LEFT JOIN patients p   ON p.external_code = c.code
@@ -182,7 +191,8 @@ export class ReferralService {
          consultant_received::text   AS consultant_received,
          treatment_count,
          treatment_received::text    AS treatment_received,
-         first_treatment_date, last_treatment_date, treating_doctors
+         first_treatment_date, last_treatment_date, treating_doctors,
+         treatment_services
        FROM joined
        ORDER BY ${column} ${dir} NULLS LAST, code ASC
        LIMIT ${bind(query.limit)} OFFSET ${bind(query.offset)}`,
@@ -202,6 +212,9 @@ export class ReferralService {
         consultationCount: this.toNumber(r.consultation_count),
         treatingDoctors: Array.isArray(r.treating_doctors)
           ? (r.treating_doctors as unknown[]).map(String).filter(Boolean)
+          : [],
+        treatmentServices: Array.isArray(r.treatment_services)
+          ? (r.treatment_services as unknown[]).map(String).filter(Boolean)
           : [],
         treatmentCount: this.toNumber(r.treatment_count),
         treatmentReceived: this.toNumber(r.treatment_received),

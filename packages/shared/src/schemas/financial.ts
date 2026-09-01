@@ -181,6 +181,8 @@ export const rankedPatientSchema = z.object({
   segmentLabel: z.string(),
   tier: patientTierSchema,
   tierLabel: z.string(),
+  /** Hand-assigned standing, if any — see `patientVipFlagSchema`. */
+  vipFlag: z.enum(["VIP", "CELEBRITY"]).nullable(),
 });
 export type RankedPatient = z.infer<typeof rankedPatientSchema>;
 
@@ -228,11 +230,20 @@ export type PatientRankingQuery = z.infer<typeof patientRankingQuerySchema>;
 
 // ─── Tier thresholds & summaries ───
 
-/** Rial thresholds. BRONZE is `0 < spend < silverMin`; GRAY is `spend <= 0`. */
+/**
+ * Rial thresholds. BRONZE is `bronzeMin <= spend < silverMin`; GRAY is
+ * everything below `bronzeMin`, which covers both low spenders and the
+ * refund-only patients whose lifetime total is negative.
+ *
+ * Every amount in this system is Rial, while the clinic states its bands in
+ * Toman — see `RIAL_PER_TOMAN` and the Toman helpers below, which the settings
+ * form uses so nobody has to count zeroes.
+ */
 export const tierSettingsSchema = z.object({
   platinumMin: z.number().nonnegative(),
   goldMin: z.number().nonnegative(),
   silverMin: z.number().nonnegative(),
+  bronzeMin: z.number().nonnegative(),
   updatedAt: z.string().nullable(),
 });
 export type TierSettings = z.infer<typeof tierSettingsSchema>;
@@ -247,11 +258,56 @@ export const tierSettingsUpdateSchema = z
     platinumMin: z.coerce.number().nonnegative(),
     goldMin: z.coerce.number().nonnegative(),
     silverMin: z.coerce.number().nonnegative(),
+    bronzeMin: z.coerce.number().nonnegative(),
   })
-  .refine((v) => v.platinumMin > v.goldMin && v.goldMin > v.silverMin && v.silverMin > 0, {
-    message: "آستانه‌ها باید نزولی و بزرگ‌تر از صفر باشند: پلاتینیوم > طلایی > نقره‌ای > ۰",
-  });
+  .refine(
+    (v) =>
+      v.platinumMin > v.goldMin &&
+      v.goldMin > v.silverMin &&
+      v.silverMin > v.bronzeMin &&
+      v.bronzeMin > 0,
+    {
+      message:
+        "آستانه‌ها باید نزولی و بزرگ‌تر از صفر باشند: پلاتینیوم > طلایی > نقره‌ای > برنز > ۰",
+    },
+  );
 export type TierSettingsUpdate = z.infer<typeof tierSettingsUpdateSchema>;
+
+/**
+ * The clinic talks in Toman; every stored amount is Rial.
+ *
+ * Kept as a named constant with helpers rather than an inline `* 10`, because
+ * the conversion appears on both sides of the settings form and a stray factor
+ * of ten in a tier threshold is invisible until a whole band empties out.
+ */
+export const RIAL_PER_TOMAN = 10;
+
+export const tomanToRial = (toman: number): number => Math.round(toman * RIAL_PER_TOMAN);
+export const rialToToman = (rial: number): number => rial / RIAL_PER_TOMAN;
+
+// ─── Manual VIP standing ───
+
+/**
+ * Standing a person assigns by hand, which spend cannot express.
+ *
+ * The tiers answer "what has this patient been worth". They cannot answer "the
+ * owner wants this one treated as VIP anyway" or "this patient is publicly
+ * known", and neither fact exists anywhere in the synced CRM.
+ */
+export const patientVipFlagSchema = z.enum(["VIP", "CELEBRITY"]);
+export type PatientVipFlag = z.infer<typeof patientVipFlagSchema>;
+
+export const PATIENT_VIP_FLAG_LABELS: Record<PatientVipFlag, string> = {
+  VIP: "VIP",
+  CELEBRITY: "سلبریتی",
+};
+
+export const patientVipUpdateSchema = z.object({
+  /** `null` removes the standing. */
+  vipFlag: patientVipFlagSchema.nullable(),
+  note: z.string().trim().max(500).optional().nullable(),
+});
+export type PatientVipUpdate = z.infer<typeof patientVipUpdateSchema>;
 
 export const tierSummarySchema = z.object({
   tier: patientTierSchema,

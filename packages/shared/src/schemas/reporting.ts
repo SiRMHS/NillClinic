@@ -159,6 +159,15 @@ export const referralPatientSchema = z.object({
   consultationCount: z.number(),
   /** Practitioners who delivered the follow-on treatment. */
   treatingDoctors: z.array(z.string()),
+  /**
+   * The services that treatment consisted of.
+   *
+   * "Referred to whom" on its own does not tell the clinic whether the handover
+   * was the procedure the consultation was about; the service names are what
+   * make the row readable as a clinical outcome rather than a revenue line.
+   * Capped in SQL — a long-standing patient can have dozens.
+   */
+  treatmentServices: z.array(z.string()),
   treatmentCount: z.number(),
   /** Revenue from the follow-on treatment lines only. */
   treatmentReceived: z.number(),

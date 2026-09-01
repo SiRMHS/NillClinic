@@ -10,6 +10,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { useAuth } from "@/stores/auth.store"
+import { useDisplay } from "@/stores/display.store"
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -17,10 +18,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // The session cookie is httpOnly, so the client cannot inspect it — the
   // presence of a resolved `user` from /api/auth/me is the authoritative signal.
   const { isLoaded, user, load, hasPermission } = useAuth()
+  const displayLoaded = useDisplay((s) => s.isLoaded)
+  const loadDisplay = useDisplay((s) => s.load)
 
   useEffect(() => {
     load()
   }, [load])
+
+  // Only once the session is known: the masking depends on whether this user is
+  // the superadmin, and asking before /api/auth/me answers would decide that on
+  // a null user.
+  useEffect(() => {
+    if (user) void loadDisplay()
+  }, [user, loadDisplay])
 
   useEffect(() => {
     if (isLoaded && !user) {
@@ -28,7 +38,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [isLoaded, user, router])
 
-  if (!isLoaded || !user) {
+  // Waiting on the display settings too, so a page never paints a figure that
+  // the site is configured to hide and then takes it back a frame later.
+  if (!isLoaded || !user || !displayLoaded) {
     return null
   }
 

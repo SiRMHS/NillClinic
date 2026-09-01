@@ -17,6 +17,7 @@ export interface CrmContact {
   visitDate: string | null
   contactDate: string
   serviceName: string | null
+  serviceNames: string[]
   amountText: string | null
   amount: number | null
   schedulingRating: CrmRating | null
@@ -42,6 +43,10 @@ export interface CrmContact {
   callCenterReferral: string | null
   resurveyDate: string | null
   resurveyResult: string | null
+  referredDoctorName: string | null
+  treatmentDoctorName: string | null
+  treatmentServiceNames: string[]
+  treatmentDate: string | null
   createdBy: { id: string; fullName: string | null } | null
   createdAt: string
   satisfaction: number | null
@@ -88,6 +93,41 @@ export interface DoctorScore {
   loyalty: number | null
   vip: boolean
   revenue: number
+}
+
+/** One entry of a "top N by count" list — the CRM referral report's shape. */
+export interface NamedCount {
+  name: string
+  count: number
+}
+
+/**
+ * Where consultations were sent and what came of them, as recorded by the desk.
+ *
+ * Deliberately separate from /reports/referrals, which reconstructs the same
+ * journey from billed lines: that one is authoritative on money and blind to
+ * referrals that never produced an invoice, which are exactly the ones the desk
+ * needs to chase.
+ */
+export interface CrmReferralReport {
+  totalReferrals: number
+  treatedCount: number
+  pendingCount: number
+  completionRate: number | null
+  /** Treated by someone other than the doctor they were referred to. */
+  redirectedCount: number
+  byDoctor: {
+    referredDoctorName: string
+    referrals: number
+    patients: number
+    treated: number
+    pending: number
+    completionRate: number | null
+    fromDoctors: NamedCount[]
+    treatedBy: NamedCount[]
+    services: NamedCount[]
+  }[]
+  topServices: NamedCount[]
 }
 
 export interface ScheduleEntry {

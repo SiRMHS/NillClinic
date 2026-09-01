@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { apiFetch } from "@/lib/api-client"
+import { jalaliToday, jalaliYearRange } from "@jordan/shared"
 import { useAuth } from "@/stores/auth.store"
 import {
   formatCount, formatPercent, formatRial, formatRialExact, formatJalaliPeriod, toPersianNum,
@@ -116,6 +117,15 @@ export default function DashboardPage() {
   const canSeeMoney = !!permissions?.some((p) => p === "*" || p === "financial")
   const canSeeRanking = !!permissions?.some((p) => p === "*" || p === "financial.patients")
   const [summary, setSummary] = useState<RevenueSummary | null>(null)
+  /**
+   * All-time totals, kept alongside the year's.
+   *
+   * Outstanding balance is a stock, not a flow: what patients still owe does not
+   * stop being owed because it was billed last year. Scoping that tile to the
+   * current year would quietly understate the debt, so it keeps reading the
+   * unbounded figure while the revenue tile above it reads the year's.
+   */
+  const [allTime, setAllTime] = useState<RevenueSummary | null>(null)
   const [trend, setTrend] = useState<RevenuePoint[]>([])
   const [segments, setSegments] = useState<SegmentSummary[]>([])
   const [followUp, setFollowUp] = useState<FollowUpCandidate[]>([])
@@ -131,7 +141,13 @@ export default function DashboardPage() {
     setLoading(true)
     setError(null)
     try {
-      const [s, t, seg, fu, cov, conv, ret, svc] = await Promise.all([
+      const year = new URLSearchParams(jalaliYearRange()).toString()
+      const [s, all, t, seg, fu, cov, conv, ret, svc] = await Promise.all([
+        // Bounded to the current Jalali year. "درآمد کل" was the sum of every
+        // reception ever synced, which grows monotonically and therefore says
+        // nothing about how the clinic is doing — and it moved whenever the
+        // sync reached further back, which read as the figure being unstable.
+        canSeeMoney ? apiFetch<RevenueSummary>(`/api/financial/summary?${year}`) : null,
         canSeeMoney ? apiFetch<RevenueSummary>("/api/financial/summary") : null,
         canSeeMoney ? apiFetch<RevenuePoint[]>("/api/financial/trend?granularity=month") : [],
         canSeeRanking ? apiFetch<SegmentSummary[]>("/api/financial/patients/segments") : [],
@@ -142,6 +158,7 @@ export default function DashboardPage() {
         apiFetch<{ top: TopService[] }>("/api/visitors/services?limit=5&kind=procedure"),
       ])
       setSummary(s)
+      setAllTime(all)
       setTrend(t.slice(-12))
       setSegments(seg)
       setFollowUp(fu.candidates)
@@ -170,6 +187,7 @@ export default function DashboardPage() {
       : null
 
   const firstName = user?.fullName?.split(" ")[0] ?? ""
+  const currentJalaliYear = jalaliToday().slice(0, 4)
 
   return (
     <div className="flex flex-col gap-4 p-4 md:p-6" dir="rtl">
@@ -221,7 +239,7 @@ export default function DashboardPage() {
           {canSeeMoney && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Kpi
-              label="درآمد کل"
+              label={`درآمد امسال (${formatJalaliPeriod(currentJalaliYear)})`}
               value={summary ? formatRial(summary.totalReceived) : "—"}
               hint={summary ? formatRialExact(summary.totalReceived) : undefined}
               icon={<Banknote className="size-4" />}
@@ -242,16 +260,16 @@ export default function DashboardPage() {
             />
             <Kpi
               label="مانده دریافت‌نشده"
-              value={summary ? formatRial(summary.totalOutstanding) : "—"}
-              hint="بدهی باقیمانده بیماران"
+              value={allTime ? formatRial(allTime.totalOutstanding) : "—"}
+              hint="بدهی باقیمانده بیماران — کل دوره"
               icon={<Banknote className="size-4" />}
-              tone={summary && summary.totalOutstanding > 0 ? "danger" : undefined}
+              tone={allTime && allTime.totalOutstanding > 0 ? "danger" : undefined}
               href="/financial"
             />
             <Kpi
               label="میانگین هر پذیرش"
               value={summary ? formatRial(summary.averageTicket) : "—"}
-              hint={summary ? `${formatCount(summary.receptionCount)} پذیرش` : undefined}
+              hint={summary ? `${formatCount(summary.receptionCount)} پذیرش امسال` : undefined}
               icon={<CalendarCheck className="size-4" />}
             />
           </div>
@@ -345,7 +363,7 @@ export default function DashboardPage() {
               <Kpi
                 label="بیماران رتبه‌بندی‌شده"
                 value={coverage ? formatCount(coverage.rankedPatients) : "—"}
-                hint={summary ? `${formatCount(summary.uniquePatients)} بیمار با سابقه مالی` : undefined}
+                hint={allTime ? `${formatCount(allTime.uniquePatients)} بیمار با سابقه مالی` : undefined}
                 icon={<Users className="size-4" />}
                 href="/financial/patients"
               />

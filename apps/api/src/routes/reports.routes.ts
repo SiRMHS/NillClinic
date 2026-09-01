@@ -17,6 +17,15 @@ import { TierService } from "../services/tier.service.js";
 import { PatientRankingService } from "../services/patient-ranking.service.js";
 import { requirePermission } from "../middleware/permission.middleware.js";
 import { sendCsv, stampedFilename, toCsv } from "../lib/csv.js";
+import { displayMask } from "../middleware/display.middleware.js";
+import {
+  FMT,
+  addSheet,
+  addSummarySheet,
+  createWorkbook,
+  sendXlsx,
+  stampedXlsxName,
+} from "../lib/xlsx.js";
 
 export const reportsRouter = Router();
 
@@ -100,13 +109,13 @@ reportsRouter.get("/tiers/activity/export", requirePermission("financial.export"
       { header: "نام بیمار", value: (r) => r.fullName ?? "" },
       { header: "موبایل", value: (r) => r.mobile ?? "" },
       { header: "رتبه", value: (r) => r.tierLabel },
-      { header: "مجموع خرید (ریال)", value: (r) => r.lifetimeSpend },
+      { header: "مجموع خرید (ریال)", value: (r) => r.lifetimeSpend, money: true },
       { header: "تعداد مراجعه", value: (r) => r.visitCount },
       { header: "پزشک", value: (r) => r.doctorName ?? "" },
       { header: "خدمات", value: (r) => r.services ?? "" },
-      { header: "مبلغ (ریال)", value: (r) => r.amount ?? "" },
+      { header: "مبلغ (ریال)", value: (r) => r.amount ?? "", money: true },
       { header: "وضعیت", value: (r) => (r.isUpcoming ? "پیش‌رو" : r.isAccepted ? "انجام شده" : "") },
-    ]);
+    ], { hideMoney: displayMask(req).amounts });
 
     sendCsv(res, stampedFilename("گزارش-فعالیت-بیماران", jalaliToday()), csv);
   } catch (e) {
@@ -159,16 +168,146 @@ reportsRouter.get("/doctors/report/export", requirePermission("reports.export"),
       { header: "بیمار جدید", value: (r) => r.newPatientCount },
       { header: "مشاوره", value: (r) => r.consultationCount },
       { header: "درمان", value: (r) => r.treatmentCount },
-      { header: "درآمد (ریال)", value: (r) => r.received },
-      { header: "تخفیف (ریال)", value: (r) => r.discount },
-      { header: "مانده (ریال)", value: (r) => r.outstanding },
-      { header: "میانگین هر بیمار (ریال)", value: (r) => Math.round(r.averagePerPatient) },
-      { header: "میانگین هر پذیرش (ریال)", value: (r) => Math.round(r.averagePerReception) },
-      { header: "سهم از درآمد", value: (r) => `${(r.revenueShare * 100).toFixed(2)}%` },
-    ]);
+      { header: "درآمد (ریال)", value: (r) => r.received, money: true },
+      { header: "تخفیف (ریال)", value: (r) => r.discount, money: true },
+      { header: "مانده (ریال)", value: (r) => r.outstanding, money: true },
+      { header: "میانگین هر بیمار (ریال)", value: (r) => Math.round(r.averagePerPatient), money: true },
+      { header: "میانگین هر پذیرش (ریال)", value: (r) => Math.round(r.averagePerReception), money: true },
+      { header: "سهم از درآمد", value: (r) => `${(r.revenueShare * 100).toFixed(2)}%`, money: true },
+    ], { hideMoney: displayMask(req).amounts });
 
     const suffix = query.from || query.to ? `${query.from ?? "ابتدا"}-تا-${query.to ?? "انتها"}` : jalaliToday();
     sendCsv(res, stampedFilename("گزارش-پزشکان", suffix), csv);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * The doctor report as a formatted workbook.
+ *
+ * The CSV next to it stays what it is — a flat dump for someone who will pivot
+ * it themselves. This is the other thing the report has to be: a document that
+ * goes into a meeting as it is, with the range it covers on the page, aligned
+ * columns, a totals line and the clinic's share of each doctor as a percentage
+ * rather than a raw ratio.
+ *
+ * Three sheets, because the questions are separate: what the period came to,
+ * who earned it, and how the consultation-to-treatment split fell.
+ */
+reportsRouter.get("/doctors/report/export.xlsx", requirePermission("reports.export"), async (req, res, next) => {
+  try {
+    const query = doctorReportQuerySchema.parse({ ...req.query, limit: 500 });
+    const report = await doctors.getReport(query);
+    const hideMoney = displayMask(req).amounts;
+
+    const range =
+      query.from || query.to
+        ? `بازه: ${query.from ?? "ابتدا"} تا ${query.to ?? "انتها"}`
+        : "بازه: کل دوره ثبت‌شده";
+    const scope = [
+      query.serviceKind === "consultation" ? "فقط مشاوره" : null,
+      query.serviceKind === "treatment" ? "فقط درمان" : null,
+      query.tier ? `رتبه ${PATIENT_TIER_LABELS[query.tier] ?? query.tier}` : null,
+      query.doctors?.length ? `${query.doctors.length} پزشک انتخاب‌شده` : null,
+    ].filter(Boolean);
+    const subtitle = scope.length ? `${range} — ${scope.join("، ")}` : range;
+
+    const wb = createWorkbook("گزارش پزشکان");
+    type Row = (typeof report.rows)[number];
+
+    addSummarySheet(
+      wb,
+      {
+        name: "خلاصه",
+        title: "گزارش عملکرد پزشکان",
+        subtitle,
+        rows: [
+          { label: "تعداد پزشک", value: report.totals.doctorCount, format: FMT.count },
+          { label: "بیمار یکتا", value: report.totals.patientCount, format: FMT.count },
+          { label: "تعداد پذیرش", value: report.totals.receptionCount, format: FMT.count },
+          { label: "تعداد خط خدمت", value: report.totals.lineCount, format: FMT.count },
+          { label: "درآمد کل (ریال)", value: report.totals.received, format: FMT.rial, money: true },
+          { label: "تخفیف کل (ریال)", value: report.totals.discount, format: FMT.rial, money: true },
+          { label: "مانده دریافت‌نشده (ریال)", value: report.totals.outstanding, format: FMT.rial, money: true },
+          // Disclosed rather than hidden: a line naming two practitioners is
+          // counted once for each, so per-doctor revenue sums above the clinic
+          // total. The reader needs to know by how much.
+          { label: "خط با بیش از یک پزشک", value: report.sharedLineCount, format: FMT.count },
+          { label: "تاریخ تهیه گزارش", value: jalaliToday(), format: FMT.text },
+        ],
+      },
+      hideMoney,
+    );
+
+    addSheet<Row>(
+      wb,
+      {
+        name: "رتبه‌بندی پزشکان",
+        title: "رتبه‌بندی پزشکان",
+        subtitle,
+        totals: true,
+        rows: report.rows,
+        columns: [
+          { header: "#", width: 6, align: "center", value: (_r, i) => i + 1, format: FMT.count },
+          { header: "نام پزشک", width: 34, align: "right", value: (r) => r.doctorName },
+          { header: "سهم از درآمد", width: 13, value: (r) => r.revenueShare, format: FMT.percent1, money: true },
+          { header: "درآمد (ریال)", width: 18, value: (r) => r.received, format: FMT.rial, money: true, total: "sum" },
+          { header: "تخفیف (ریال)", width: 16, value: (r) => r.discount, format: FMT.rial, money: true, total: "sum" },
+          { header: "مانده (ریال)", width: 16, value: (r) => r.outstanding, format: FMT.rial, money: true, total: "sum" },
+          { header: "بیمار", width: 11, value: (r) => r.patientCount, format: FMT.count, total: "sum" },
+          { header: "بیمار جدید", width: 12, value: (r) => r.newPatientCount, format: FMT.count, total: "sum" },
+          { header: "پذیرش", width: 11, value: (r) => r.receptionCount, format: FMT.count, total: "sum" },
+          { header: "خط خدمت", width: 11, value: (r) => r.lineCount, format: FMT.count, total: "sum" },
+          { header: "میانگین هر بیمار (ریال)", width: 20, value: (r) => Math.round(r.averagePerPatient), format: FMT.rial, money: true },
+          { header: "میانگین هر پذیرش (ریال)", width: 20, value: (r) => Math.round(r.averagePerReception), format: FMT.rial, money: true },
+        ],
+      },
+      hideMoney,
+    );
+
+    addSheet<Row>(
+      wb,
+      {
+        name: "مشاوره و درمان",
+        title: "تفکیک مشاوره و درمان",
+        subtitle,
+        totals: true,
+        rows: report.rows,
+        columns: [
+          { header: "#", width: 6, align: "center", value: (_r, i) => i + 1, format: FMT.count },
+          { header: "نام پزشک", width: 34, align: "right", value: (r) => r.doctorName },
+          { header: "مشاوره", width: 12, value: (r) => r.consultationCount, format: FMT.count, total: "sum" },
+          { header: "درمان", width: 12, value: (r) => r.treatmentCount, format: FMT.count, total: "sum" },
+          {
+            header: "سهم مشاوره از کار",
+            width: 18,
+            /**
+             * Consultations as a share of this doctor's billed lines.
+             *
+             * Not treatments ÷ consultations, which was the obvious first
+             * try and is unreadable: these are line counts, so a doctor who
+             * mostly performs procedures scores 54100%, and one who only
+             * consults divides by a denominator that is barely there. A share
+             * of the whole stays on 0–100% and answers the question the split
+             * is actually for — is this a consulting doctor or an operating
+             * one.
+             */
+            value: (r) => {
+              const lines = r.consultationCount + r.treatmentCount;
+              return lines > 0 ? r.consultationCount / lines : null;
+            },
+            format: FMT.percent,
+          },
+          { header: "بیمار", width: 11, value: (r) => r.patientCount, format: FMT.count, total: "sum" },
+          { header: "بیمار جدید", width: 12, value: (r) => r.newPatientCount, format: FMT.count, total: "sum" },
+          { header: "درآمد (ریال)", width: 18, value: (r) => r.received, format: FMT.rial, money: true, total: "sum" },
+        ],
+      },
+      hideMoney,
+    );
+
+    await sendXlsx(res, stampedXlsxName("گزارش-پزشکان", jalaliToday()), wb);
   } catch (e) {
     next(e);
   }
@@ -197,13 +336,14 @@ reportsRouter.get("/referrals/export", requirePermission("reports.export"), asyn
       { header: "تاریخ مشاوره", value: (r) => r.consultationDate ?? "" },
       { header: "تعداد مشاوره", value: (r) => r.consultationCount },
       { header: "پزشک درمان", value: (r) => r.treatingDoctors.join(" | ") },
+      { header: "خدمات گرفته‌شده", value: (r) => r.treatmentServices.join(" | ") },
       { header: "تعداد درمان", value: (r) => r.treatmentCount },
       { header: "اولین درمان", value: (r) => r.firstTreatmentDate ?? "" },
       { header: "آخرین درمان", value: (r) => r.lastTreatmentDate ?? "" },
-      { header: "درآمد درمان (ریال)", value: (r) => r.treatmentReceived },
-      { header: "درآمد پزشک مشاور (ریال)", value: (r) => r.consultingDoctorReceived },
-      { header: "مجموع خرید بیمار (ریال)", value: (r) => r.lifetimeSpend },
-    ]);
+      { header: "درآمد درمان (ریال)", value: (r) => r.treatmentReceived, money: true },
+      { header: "درآمد پزشک مشاور (ریال)", value: (r) => r.consultingDoctorReceived, money: true },
+      { header: "مجموع خرید بیمار (ریال)", value: (r) => r.lifetimeSpend, money: true },
+    ], { hideMoney: displayMask(req).amounts });
 
     sendCsv(res, stampedFilename("گزارش-ارجاع-مشاوره", jalaliToday()), csv);
   } catch (e) {
@@ -225,15 +365,15 @@ reportsRouter.get("/patients/ranking/export", requirePermission("financial.expor
       { header: "رتبه", value: (r) => PATIENT_TIER_LABELS[r.tier] ?? r.tier },
       { header: "گروه رفتاری", value: (r) => r.segmentLabel },
       { header: "تعداد مراجعه", value: (r) => r.visitCount },
-      { header: "مجموع پرداختی (ریال)", value: (r) => r.totalReceived },
-      { header: "تخفیف (ریال)", value: (r) => r.totalDiscount },
-      { header: "مانده (ریال)", value: (r) => r.totalOutstanding },
-      { header: "میانگین هر مراجعه (ریال)", value: (r) => Math.round(r.averageTicket) },
+      { header: "مجموع پرداختی (ریال)", value: (r) => r.totalReceived, money: true },
+      { header: "تخفیف (ریال)", value: (r) => r.totalDiscount, money: true },
+      { header: "مانده (ریال)", value: (r) => r.totalOutstanding, money: true },
+      { header: "میانگین هر مراجعه (ریال)", value: (r) => Math.round(r.averageTicket), money: true },
       { header: "اولین مراجعه", value: (r) => r.firstVisitDate ?? "" },
       { header: "آخرین مراجعه", value: (r) => r.lastVisitDate ?? "" },
       { header: "روز از آخرین مراجعه", value: (r) => r.recencyDays ?? "" },
       { header: "امتیاز RFM", value: (r) => r.rfmScore },
-    ]);
+    ], { hideMoney: displayMask(req).amounts });
 
     sendCsv(res, stampedFilename("رتبه‌بندی-بیماران", jalaliToday()), csv);
   } catch (e) {

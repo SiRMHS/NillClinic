@@ -186,6 +186,21 @@ export function jalaliToday(now: Date = new Date()): string {
   return dateToJalali(now);
 }
 
+/**
+ * The Jalali year `date` falls in, as an inclusive `from`/`to` range.
+ *
+ * "This year" is a Jalali year here, not a Gregorian one — the clinic's books,
+ * targets and every date on screen run فروردین to اسفند, so a range built on
+ * the Gregorian year would start in the middle of دی and read as wrong to
+ * everyone using it. The end is 12/30 rather than 12/29 so a leap year is
+ * covered; the extra day in an ordinary year matches nothing and is harmless.
+ */
+export function jalaliYearRange(date: string = jalaliToday()): { from: string; to: string } {
+  const p = parseJalali(date);
+  const year = p ? p.jy : Number(jalaliToday().slice(0, 4));
+  return { from: `${year}/01/01`, to: `${year}/12/30` };
+}
+
 /** Shift a Jalali date by whole days, staying in Jalali. */
 export function addJalaliDays(value: string, days: number): string {
   const p = parseJalali(value);

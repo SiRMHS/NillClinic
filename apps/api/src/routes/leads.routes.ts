@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Router } from "express";
 import { prisma, type Prisma } from "@jordan/db";
 import {
@@ -12,6 +13,7 @@ import {
 import { createEncryptFn, decrypt } from "../security/encryption.js";
 import { ZodError } from "zod";
 import { requirePermission, can } from "../middleware/permission.middleware.js";
+import { assertLeadAccess, scopedLeadWhere } from "../lib/lead-scope.js";
 
 export const leadsRouter = Router();
 
@@ -131,7 +133,7 @@ leadsRouter.get("/", async (req, res, next) => {
       : { createdAt: "desc" as const };
 
     const leads = await prisma.lead.findMany({
-      where,
+      where: scopedLeadWhere(req, where),
       orderBy,
       take: parseLimit(req.query.limit),
       include: leadInclude,
@@ -168,6 +170,8 @@ leadsRouter.get("/counts", async (req, res, next) => {
 
 leadsRouter.get("/:id", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const lead = await prisma.lead.findUnique({
       where: { id: req.params.id },
       include: {
@@ -240,6 +244,8 @@ leadsRouter.post("/", async (req, res, next) => {
 
 leadsRouter.patch("/:id/assign", requirePermission("leads.assign"), async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const { assignedUserId } = assignLeadSchema.parse(req.body);
 
     const existing = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { assignedUserId: true } });
@@ -289,6 +295,8 @@ leadsRouter.patch("/:id/assign", requirePermission("leads.assign"), async (req, 
 
 leadsRouter.patch("/:id/status", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const { status } = updateLeadStatusSchema.parse(req.body);
     const lead = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { assignedUserId: true } });
     if (!lead) { res.status(404).json({ error: "لید یافت نشد" }); return; }
@@ -311,6 +319,8 @@ leadsRouter.patch("/:id/status", async (req, res, next) => {
 
 leadsRouter.patch("/:id/campaign", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const { campaignId } = assignLeadCampaignSchema.parse(req.body);
     const lead = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { assignedUserId: true, campaignId: true } });
     if (!lead) { res.status(404).json({ error: "لید یافت نشد" }); return; }
@@ -346,6 +356,8 @@ leadsRouter.patch("/:id/campaign", async (req, res, next) => {
 
 leadsRouter.post("/:id/calls", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const body = registerCallSchema.parse(req.body);
     const userId = req.user?.sub;
 
@@ -465,6 +477,8 @@ leadsRouter.post("/:id/calls", async (req, res, next) => {
 
 leadsRouter.post("/:id/follow-ups", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const body = createFollowUpSchema.parse(req.body);
     const userId = req.user?.sub;
 
@@ -505,6 +519,8 @@ leadsRouter.post("/:id/follow-ups", async (req, res, next) => {
 
 leadsRouter.patch("/:id/follow-ups/:followUpId", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const status = req.body.status as "COMPLETED" | "CANCELLED";
     const followUp = await prisma.leadFollowUp.update({
       where: { id: req.params.followUpId, leadId: req.params.id },
@@ -533,6 +549,8 @@ leadsRouter.patch("/:id/follow-ups/:followUpId", async (req, res, next) => {
 
 leadsRouter.post("/:id/interactions", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const { type, content } = req.body;
 
     const leadCheck = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { assignedUserId: true } });
@@ -555,6 +573,8 @@ leadsRouter.post("/:id/interactions", async (req, res, next) => {
 
 leadsRouter.get("/:id/match-patient", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     const lead = await prisma.lead.findUnique({
       where: { id: req.params.id },
       select: { mobileEnc: true },
@@ -589,6 +609,8 @@ leadsRouter.get("/:id/match-patient", async (req, res, next) => {
 
 leadsRouter.delete("/:id", async (req, res, next) => {
   try {
+    if (!(await assertLeadAccess(req, res, req.params.id))) return;
+
     // Deletion used to be superadmin-only. It is now its own grantable key so a
     // sales lead can be given it without also being handed the whole system —
     // superadmin still passes, because `*` satisfies every key.
@@ -615,31 +637,63 @@ async function safeWebhookLog(data: Prisma.WebhookLogCreateInput) {
   }
 }
 
-/** Webhook for Manychat / n8n — secured via shared secret header */
+/**
+ * Constant-time string compare for the webhook secret.
+ *
+ * `timingSafeEqual` throws on a length mismatch, which would itself be a
+ * timing signal, so both sides are hashed to a fixed width first.
+ */
+function safeCompare(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
+
+/** Webhook for Manychat / n8n — secured via a shared secret header. */
 leadsWebhookRouter.post("/", async (req, res) => {
   const ipAddress = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "unknown").split(",")[0]?.trim() ?? "unknown";
 
   try {
-    const configuredSecret = process.env.LEAD_WEBHOOK_SECRET;
+    /**
+     * The only route in this API reachable without a session, so the shared
+     * secret is the whole of its authentication.
+     *
+     * It used to be checked only `if (configuredSecret)` — an unset
+     * `LEAD_WEBHOOK_SECRET` skipped the check entirely and left an open write
+     * endpoint on the public internet. `docker-compose.yml` passes
+     * `${LEAD_WEBHOOK_SECRET:-}`, so a deploy that simply forgot the variable
+     * got exactly that. It now fails closed: no secret configured means the
+     * endpoint refuses everyone, which is loud and safe rather than silent and
+     * open.
+     */
+    const configuredSecret = process.env.LEAD_WEBHOOK_SECRET?.trim();
 
-    if (configuredSecret) {
-      const secret = (req.headers["x-webhook-secret"] as string || "")
-        .replace(/^['"]|['"]$/g, "")
-        .trim();
+    if (!configuredSecret) {
+      console.error(
+        "[security] LEAD_WEBHOOK_SECRET is not set — the lead webhook is refusing all requests.",
+      );
+      res.status(503).json({ error: "Webhook is not configured" });
+      return;
+    }
 
-      if (!secret || secret !== configuredSecret) {
-        await safeWebhookLog({
-          source: req.body?.source ?? "unknown",
-          action: "rejected",
-          name: req.body?.name,
-          phone: req.body?.phone,
-          externalRef: req.body?.external_id,
-          ipAddress,
-          metadata: { reason: "invalid_secret" },
-        });
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-      }
+    const secret = (req.headers["x-webhook-secret"] as string || "")
+      .replace(/^['"]|['"]$/g, "")
+      .trim();
+
+    // Length-independent compare, so a wrong secret cannot be recovered a byte
+    // at a time from response timing.
+    if (!secret || !safeCompare(secret, configuredSecret)) {
+      await safeWebhookLog({
+        source: req.body?.source ?? "unknown",
+        action: "rejected",
+        name: req.body?.name,
+        phone: req.body?.phone,
+        externalRef: req.body?.external_id,
+        ipAddress,
+        metadata: { reason: "invalid_secret" },
+      });
+      res.status(401).json({ error: "Unauthorized" });
+      return;
     }
 
     const payload = leadWebhookSchema.parse(req.body);

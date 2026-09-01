@@ -22,9 +22,11 @@ export const AVAILABLE_PERMISSIONS: PermissionDef[] = [
   // ─── بیماران ───
   { key: "patients.view", label: "مشاهده بیماران", group: "بیماران", hint: "فهرست و پرونده بیماران" },
   { key: "patients", label: "مدیریت بیماران", group: "بیماران", hint: "شامل مشاهده + خروجی گرفتن" },
+  { key: "patients.vip", label: "تعیین VIP و سلبریتی", group: "بیماران", hint: "ثبت دستی رتبه ویژه برای بیمار، مستقل از مبلغ پرداختی" },
 
   // ─── فروش ───
-  { key: "leads", label: "لیدها", group: "فروش", hint: "فهرست لیدها، تماس‌ها و پیگیری‌ها" },
+  { key: "leads", label: "لیدها", group: "فروش", hint: "فقط لیدهای خودِ کارشناس و لیدهای واگذارنشده" },
+  { key: "leads.all", label: "مشاهده همه لیدها", group: "فروش", hint: "دیدن لیدهای سایر کارشناسان — مخصوص سرپرست فروش" },
   { key: "leads.assign", label: "واگذاری لید", group: "فروش", hint: "تغییر کارشناس مسئول یک لید" },
   { key: "leads.delete", label: "حذف لید", group: "فروش", hint: "حذف دائمی لید از سیستم" },
   { key: "campaigns", label: "کمپین‌ها", group: "فروش", hint: "ساخت و مدیریت کمپین‌های تبلیغاتی" },
@@ -63,6 +65,7 @@ export const AVAILABLE_PERMISSIONS: PermissionDef[] = [
   { key: "settings.leads-log", label: "لاگ ورودی‌ها", group: "سیستم", hint: "تاریخچه لیدهای دریافتی" },
   { key: "settings.leads-bank", label: "بانک لیدها", group: "سیستم", hint: "آرشیو کامل لیدهای خام" },
   { key: "settings.telephony", label: "تنظیمات تلفن", group: "سیستم", hint: "نحوه شماره‌گیری دکمه تماس (Issabel، 3CX، سافت‌فون)" },
+  { key: "settings.display", label: "تنظیمات نمایش", group: "سیستم", hint: "مخفی کردن ارقام مالی و نرخ‌ها در نمایش سایت" },
 ];
 
 export const ALL_PERMISSION_KEYS: string[] = AVAILABLE_PERMISSIONS.map((p) => p.key);
@@ -79,7 +82,11 @@ export const ALL_PERMISSION_KEYS: string[] = AVAILABLE_PERMISSIONS.map((p) => p.
  * migration in packages/db/prisma/migrations, rather than through this map.
  */
 const PERMISSION_IMPLIES: Record<string, string[]> = {
-  patients: ["patients.view"],
+  patients: ["patients.view", "patients.vip"],
+  // Deliberately NOT implying `leads.all`: `leads` is now an agent's own queue
+  // plus the unassigned pool, and a supervisor who needs the whole board is
+  // given `leads.all` explicitly. Implying it here would restore exactly the
+  // cross-agent visibility the key exists to remove.
   leads: ["campaigns", "leads.assign"],
   analytics: [
     "analytics.medical",

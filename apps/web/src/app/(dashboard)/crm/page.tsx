@@ -1,8 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { apiFetch } from "@/lib/api-client"
-import { formatCount, formatPercent, formatRial, formatRialExact, toPersianNum } from "@/lib/format"
+import { apiDownload, apiFetch } from "@/lib/api-client"
+import { useCrmMasking } from "@/stores/display.store"
+import { MASKED_FIGURE, formatCount, formatPercent, formatRial, formatRialExact, toPersianNum } from "@/lib/format"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,8 +13,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { DateRangeFilter } from "@/components/ui/date-range-filter"
 import { SortableHead, useSortableRows } from "@/components/ui/sortable-table"
 import { PatientDetailDialog } from "@/components/patient-detail-dialog"
+import { toast } from "sonner"
 import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, PhoneCall, RefreshCw,
+  AlertTriangle, ArrowDownRight, ArrowUpRight, Download, PhoneCall, RefreshCw,
   Repeat, Stethoscope, TrendingUp, Users,
 } from "lucide-react"
 
@@ -119,6 +121,42 @@ function Stat({
 }
 
 /** Inline proportion bar — reads faster than a number alone in a dense table. */
+/**
+ * Money and rate formatting for this page, honouring the CRM display switches.
+ *
+ * The site-wide switch is already handled inside `formatRial` itself, and the
+ * API strips those amounts before they arrive. The CRM-scoped switches cannot
+ * be: these endpoints also back the dashboard and the patient dialog, so they
+ * are applied on the page that the switch actually names.
+ */
+function useCrmFormat() {
+  const masked = useCrmMasking()
+  return {
+    masked,
+    rial: (value: number | null | undefined) =>
+      masked.amounts ? MASKED_FIGURE : formatRial(value ?? 0),
+    rialExact: (value: number | null | undefined) =>
+      masked.amounts ? MASKED_FIGURE : formatRialExact(value ?? 0),
+    rate: (value: number | null | undefined, digits = 1) =>
+      masked.rates ? MASKED_FIGURE : value === null || value === undefined ? "—" : formatPercent(value, digits),
+  }
+}
+
+/** A RateBar that reads «———» instead of drawing a bar when rates are hidden. */
+function MaskableRate({
+  value,
+  hidden,
+  tone,
+}: {
+  value: number | null
+  hidden: boolean
+  tone?: "emerald" | "amber"
+}) {
+  if (hidden) return <span className="text-muted-foreground">{MASKED_FIGURE}</span>
+  if (value === null) return <span className="text-muted-foreground">—</span>
+  return <RateBar value={value} tone={tone} />
+}
+
 function RateBar({ value, tone = "emerald" }: { value: number; tone?: "emerald" | "amber" }) {
   const pct = Math.max(0, Math.min(1, value)) * 100
   return (
@@ -231,6 +269,7 @@ export default function VisitorAnalyticsPage() {
 
   const conv = conversion?.summary
   const ret = retention?.summary
+  const fmt = useCrmFormat()
 
   return (
     <div className="flex flex-col gap-4 p-4 md:p-6" dir="rtl">
@@ -290,14 +329,14 @@ export default function VisitorAnalyticsPage() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat
               label="نرخ تبدیل"
-              value={conv ? formatPercent(conv.conversionRate) : "—"}
+              value={conv ? fmt.rate(conv.conversionRate) : "—"}
               hint={conv ? `${formatCount(conv.convertedPatients)} از ${formatCount(conv.consultedPatients)} مراجع` : undefined}
               icon={<TrendingUp className="size-4" />}
               tone="positive"
             />
             <Stat
               label="نرخ بازگشت"
-              value={ret ? formatPercent(ret.returnRate) : "—"}
+              value={ret ? fmt.rate(ret.returnRate) : "—"}
               hint={ret ? `${formatCount(ret.returningPatients)} بیمار بیش از یک بار آمده‌اند` : undefined}
               icon={<Repeat className="size-4" />}
             />
@@ -308,7 +347,7 @@ export default function VisitorAnalyticsPage() {
             />
             <Stat
               label="درآمد هر تبدیل"
-              value={conv ? formatRial(conv.revenuePerConverted) : "—"}
+              value={conv ? fmt.rial(conv.revenuePerConverted) : "—"}
               hint={conv ? `میانه ${toPersianNum(conv.medianDaysToConvert ?? 0)} روز تا اولین عمل` : undefined}
             />
             <Stat
@@ -345,6 +384,9 @@ export default function VisitorAnalyticsPage() {
             </TabsList>
 
             <TabsContent value="services">
+              <div className="mb-3 flex justify-end">
+                <ExportButton dataset="services" from={from} to={to} label="خروجی همه خدمات" />
+              </div>
               <div className="grid gap-4 lg:grid-cols-2">
                 <Card>
                   <CardHeader>
@@ -381,7 +423,10 @@ export default function VisitorAnalyticsPage() {
             <TabsContent value="conversion">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">تبدیل مشاوره به عمل</CardTitle>
+                  <div className="flex items-start justify-between gap-3">
+                    <CardTitle className="text-base">تبدیل مشاوره به عمل</CardTitle>
+                    <ExportButton dataset="conversion" from={from} to={to} />
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     بیمار وقتی «تبدیل‌شده» شمرده می‌شود که در روز مشاوره یا پس از آن، خدمت
                     غیرمشاوره‌ای دریافت کرده باشد.
@@ -405,10 +450,10 @@ export default function VisitorAnalyticsPage() {
                           <TableCell className="text-left tabular-nums">{formatCount(t.consultedPatients)}</TableCell>
                           <TableCell className="text-left tabular-nums">{formatCount(t.convertedPatients)}</TableCell>
                           <TableCell className="text-left">
-                            <RateBar value={t.conversionRate} />
+                            <MaskableRate value={t.conversionRate} hidden={fmt.masked.rates} />
                           </TableCell>
-                          <TableCell className="text-left tabular-nums" title={formatRialExact(t.revenueAfter)}>
-                            {formatRial(t.revenueAfter)}
+                          <TableCell className="text-left tabular-nums" title={fmt.rialExact(t.revenueAfter)}>
+                            {fmt.rial(t.revenueAfter)}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -421,10 +466,13 @@ export default function VisitorAnalyticsPage() {
             <TabsContent value="doctors">
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Stethoscope className="size-4" />
-                    رتبه‌بندی پزشکان و پرسنل
-                  </CardTitle>
+                  <div className="flex items-start justify-between gap-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Stethoscope className="size-4" />
+                      رتبه‌بندی پزشکان و پرسنل
+                    </CardTitle>
+                    <ExportButton dataset="doctors" from={from} to={to} />
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     بر پایه نتیجه، نه صرفاً تعداد: درآمد، بیمار یکتا، نرخ بازگشت بیماران و نرخ تبدیل
                   </p>
@@ -448,19 +496,19 @@ export default function VisitorAnalyticsPage() {
                         <TableRow key={d.personnelName}>
                           <TableCell className="text-muted-foreground tabular-nums">{toPersianNum(i + 1)}</TableCell>
                           <TableCell className="font-medium">{d.personnelName}</TableCell>
-                          <TableCell className="text-left tabular-nums" title={formatRialExact(d.revenue)}>
-                            {formatRial(d.revenue)}
+                          <TableCell className="text-left tabular-nums" title={fmt.rialExact(d.revenue)}>
+                            {fmt.rial(d.revenue)}
                           </TableCell>
-                          <TableCell className="text-left tabular-nums">{formatPercent(d.revenueShare, 0)}</TableCell>
+                          <TableCell className="text-left tabular-nums">
+                            {fmt.masked.amounts ? MASKED_FIGURE : formatPercent(d.revenueShare, 0)}
+                          </TableCell>
                           <TableCell className="text-left tabular-nums">{formatCount(d.patientCount)}</TableCell>
-                          <TableCell className="text-left tabular-nums">{formatRial(d.averageTicket)}</TableCell>
-                          <TableCell className="text-left"><RateBar value={d.repeatPatientRate} /></TableCell>
+                          <TableCell className="text-left tabular-nums">{fmt.rial(d.averageTicket)}</TableCell>
                           <TableCell className="text-left">
-                            {d.conversionRate === null ? (
-                              <span className="text-muted-foreground">—</span>
-                            ) : (
-                              <RateBar value={d.conversionRate} tone="amber" />
-                            )}
+                            <MaskableRate value={d.repeatPatientRate} hidden={fmt.masked.rates} />
+                          </TableCell>
+                          <TableCell className="text-left">
+                            <MaskableRate value={d.conversionRate} hidden={fmt.masked.rates} tone="amber" />
                           </TableCell>
                         </TableRow>
                       ))}
@@ -473,7 +521,10 @@ export default function VisitorAnalyticsPage() {
             <TabsContent value="retention">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">توزیع تعداد مراجعه</CardTitle>
+                  <div className="flex items-start justify-between gap-3">
+                    <CardTitle className="text-base">توزیع تعداد مراجعه</CardTitle>
+                    <ExportButton dataset="retention" from={from} to={to} />
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     چند بیمار چند بار آمده‌اند و هر گروه چقدر درآمد ساخته‌اند
                   </p>
@@ -501,11 +552,15 @@ export default function VisitorAnalyticsPage() {
                             <TableCell className="text-left">
                               <RateBar value={totalPatients > 0 ? b.patientCount / totalPatients : 0} />
                             </TableCell>
-                            <TableCell className="text-left tabular-nums" title={formatRialExact(b.revenue)}>
-                              {formatRial(b.revenue)}
+                            <TableCell className="text-left tabular-nums" title={fmt.rialExact(b.revenue)}>
+                              {fmt.rial(b.revenue)}
                             </TableCell>
                             <TableCell className="text-left">
-                              <RateBar value={totalRevenue > 0 ? b.revenue / totalRevenue : 0} tone="amber" />
+                              <MaskableRate
+                                value={totalRevenue > 0 ? b.revenue / totalRevenue : 0}
+                                hidden={fmt.masked.amounts}
+                                tone="amber"
+                              />
                             </TableCell>
                           </TableRow>
                         ))
@@ -519,10 +574,13 @@ export default function VisitorAnalyticsPage() {
             <TabsContent value="followup">
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <PhoneCall className="size-4" />
-                    بیماران نیازمند پیگیری
-                  </CardTitle>
+                  <div className="flex items-start justify-between gap-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <PhoneCall className="size-4" />
+                      بیماران نیازمند پیگیری
+                    </CardTitle>
+                    <ExportButton dataset="follow-up" from={from} to={to} />
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     خدمت پولی گرفته‌اند، بیش از ۶ ماه نیامده‌اند، و بر اساس ارزششان مرتب شده‌اند
                   </p>
@@ -568,8 +626,8 @@ export default function VisitorAnalyticsPage() {
                               </Badge>
                             </TableCell>
                             <TableCell className="text-left tabular-nums">{toPersianNum(c.visitCount)}</TableCell>
-                            <TableCell className="text-left tabular-nums" title={formatRialExact(c.totalReceived)}>
-                              {formatRial(c.totalReceived)}
+                            <TableCell className="text-left tabular-nums" title={fmt.rialExact(c.totalReceived)}>
+                              {fmt.rial(c.totalReceived)}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -592,7 +650,51 @@ export default function VisitorAnalyticsPage() {
   )
 }
 
+/**
+ * Per-tab CSV export.
+ *
+ * One button per tab rather than one for the page: each tab is its own table
+ * with its own columns, and a single «خروجی» that guessed which one you meant
+ * would be wrong four times out of five. The file covers the whole table for
+ * the current date range, not the rows on screen.
+ */
+function ExportButton({
+  dataset,
+  from,
+  to,
+  label = "خروجی اکسل",
+}: {
+  dataset: "services" | "conversion" | "doctors" | "retention" | "follow-up"
+  from: string
+  to: string
+  label?: string
+}) {
+  const [busy, setBusy] = useState(false)
+
+  const run = async () => {
+    setBusy(true)
+    try {
+      const qs = new URLSearchParams({ dataset })
+      if (from) qs.set("from", from)
+      if (to) qs.set("to", to)
+      await apiDownload(`/api/visitors/export?${qs.toString()}`, `${dataset}.csv`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "خطا در دریافت خروجی")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Button variant="outline" size="sm" onClick={() => void run()} disabled={busy}>
+      <Download className={`size-4 ${busy ? "animate-pulse" : ""}`} />
+      {label}
+    </Button>
+  )
+}
+
 function ServiceTable({ rows }: { rows: ServicePopularity[] }) {
+  const fmt = useCrmFormat()
   if (rows.length === 0) {
     return <div className="py-8 text-center text-sm text-muted-foreground">داده‌ای موجود نیست.</div>
   }
@@ -619,8 +721,8 @@ function ServiceTable({ rows }: { rows: ServicePopularity[] }) {
             </TableCell>
             <TableCell className="text-left tabular-nums">{formatCount(s.receptionCount)}</TableCell>
             <TableCell className="text-left tabular-nums">{formatCount(s.patientCount)}</TableCell>
-            <TableCell className="text-left tabular-nums" title={formatRialExact(s.revenue)}>
-              {formatRial(s.revenue)}
+            <TableCell className="text-left tabular-nums" title={fmt.rialExact(s.revenue)}>
+              {fmt.rial(s.revenue)}
             </TableCell>
           </TableRow>
         ))}

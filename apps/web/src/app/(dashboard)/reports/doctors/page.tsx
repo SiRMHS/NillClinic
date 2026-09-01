@@ -20,7 +20,7 @@ import {
   PATIENT_TIER_ORDER,
   type PatientTier,
 } from "@/components/tier-badge"
-import { Download, Info, Stethoscope } from "lucide-react"
+import { Download, FileSpreadsheet, Info, Stethoscope } from "lucide-react"
 import { toast } from "sonner"
 import { useAuth } from "@/stores/auth.store"
 
@@ -143,10 +143,19 @@ export default function DoctorReportPage() {
     setSelectedDoctors((c) => (c.includes(name) ? c.filter((d) => d !== name) : [...c, name]))
   }
 
-  const exportCsv = async () => {
+  /**
+   * Two exports, because they are read by different people.
+   *
+   * The workbook is the report as a document — title, the range it covers,
+   * a totals line, aligned columns — for someone who will open it and read it.
+   * The CSV stays the flat dump for someone who is going to pivot it themselves
+   * and does not want formatting in the way.
+   */
+  const runExport = async (kind: "xlsx" | "csv") => {
     setExporting(true)
     try {
-      await apiDownload(`/api/reports/doctors/report/export?${query}`)
+      const path = kind === "xlsx" ? "export.xlsx" : "export"
+      await apiDownload(`/api/reports/doctors/report/${path}?${query}`)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "خروجی گرفتن ناموفق بود")
     } finally {
@@ -164,10 +173,16 @@ export default function DoctorReportPage() {
           </p>
         </div>
         {canExport && (
-        <Button variant="outline" size="sm" onClick={() => void exportCsv()} disabled={exporting}>
-          <Download className="size-4" />
-          خروجی اکسل
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => void runExport("xlsx")} disabled={exporting}>
+            <FileSpreadsheet className="size-4" />
+            گزارش اکسل
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void runExport("csv")} disabled={exporting}>
+            <Download className="size-4" />
+            CSV خام
+          </Button>
+        </div>
         )}
       </div>
 

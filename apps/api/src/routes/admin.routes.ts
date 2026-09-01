@@ -237,6 +237,26 @@ adminRouter.post("/roles", requirePermission("settings.roles"), async (req, res,
 adminRouter.patch("/roles/:id", requirePermission("settings.roles"), async (req, res, next) => {
   try {
     const body = updateRoleSchema.parse(req.body);
+
+    /**
+     * The superadmin role is not editable through the API.
+     *
+     * Deleting it was already refused; editing it was not, which left the
+     * larger hole of the two. `*` cannot be *granted* here — it is absent from
+     * `ALL_PERMISSION_KEYS`, so `permissionKeySchema` rejects it — but it could
+     * be *removed*: one PATCH replacing the permission list would strip `*`
+     * from the only role that holds it and lock every account out of role
+     * management permanently, with no path back through the UI.
+     */
+    const target = await prisma.role.findUnique({
+      where: { id: req.params.id },
+      select: { name: true },
+    });
+    if (target?.name === "superadmin") {
+      res.status(403).json({ error: "نقش مدیر سیستم قابل ویرایش نیست" });
+      return;
+    }
+
     const role = await prisma.role.update({
       where: { id: req.params.id },
       data: body,

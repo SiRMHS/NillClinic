@@ -50,6 +50,7 @@ model User {
   leadFollowUps    LeadFollowUp[]
   leadAppointments LeadAppointment[]
   crmContacts      CrmContact[]      @relation("CrmContactAuthor")
+  vipPatients      Patient[]         @relation("PatientVipAuthor")
 
   @@map("users")
 }
@@ -77,13 +78,26 @@ model Patient {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
+  /// Manual standing, set by a person rather than derived from spend.
+  ///
+  /// Spend tiers answer "what has this patient been worth"; they cannot answer
+  /// "this is a public figure" or "the owner wants this patient treated as VIP
+  /// regardless of what the till says". Those two facts have no column in the
+  /// synced CRM, so they live here and are never overwritten by a recompute.
+  vipFlag    PatientVipFlag? @map("vip_flag")
+  vipNote    String?         @map("vip_note")
+  vipSetAt   DateTime?       @map("vip_set_at")
+  vipSetById String?         @map("vip_set_by_id")
+
   treatments  Treatment[]
   reserves    Reserve[]
   leads       Lead[]          @relation("LeadConvertedPatient")
   receptions  Reception[]
   metrics     PatientMetrics?
   crmContacts CrmContact[]
+  vipSetBy    User?           @relation("PatientVipAuthor", fields: [vipSetById], references: [id])
 
+  @@index([vipFlag])
   @@index([fullName])
   @@index([mobile])
   @@index([syncedAt])
@@ -257,6 +271,16 @@ enum PatientTier {
   GRAY
 }
 
+/// Manual standing a person assigns, independent of spend.
+///
+/// `CELEBRITY` is not a richer `VIP`: it says the patient is publicly known and
+/// their visit needs handling (discretion, scheduling), which is a different
+/// instruction to the desk than "look after this one".
+enum PatientVipFlag {
+  VIP
+  CELEBRITY
+}
+
 enum PatientSegment {
   CHAMPION
   LOYAL
@@ -311,17 +335,19 @@ model PatientMetrics {
 ///
 /// A single row (id = 1). These are a commercial decision, not a property of
 /// the data, so they live in the database rather than in the scoring SQL:
-/// the clinic can move the platinum bar without a deploy. Defaults were chosen
-/// against the live distribution — they put ~3.8% of patients in PLATINUM,
-/// who account for ~53% of all revenue.
+/// the clinic can move the platinum bar without a deploy.
 ///
-/// BRONZE is everything above zero but below `silverMin`; GRAY is zero or
-/// negative (refund-only) lifetime spend, so no explicit bound is stored.
+/// Defaults are the clinic's own bands, quoted to us in Toman and stored in
+/// Rial (×10) because every amount in this schema is Rial:
+///   PLATINUM ≥ ۱ میلیارد تومان, GOLD ≥ ۶۰۰ میلیون, SILVER ≥ ۳۰۰ میلیون,
+///   BRONZE ≥ ۱۰۰ میلیون. GRAY is everything below `bronzeMin`, which now
+///   includes low-spend patients as well as the refund-only ones.
 model TierSettings {
   id          Int      @id @default(1)
-  platinumMin Decimal  @default(500000000) @map("platinum_min") @db.Decimal(18, 2)
-  goldMin     Decimal  @default(200000000) @map("gold_min") @db.Decimal(18, 2)
-  silverMin   Decimal  @default(50000000) @map("silver_min") @db.Decimal(18, 2)
+  platinumMin Decimal  @default(10000000000) @map("platinum_min") @db.Decimal(18, 2)
+  goldMin     Decimal  @default(6000000000) @map("gold_min") @db.Decimal(18, 2)
+  silverMin   Decimal  @default(3000000000) @map("silver_min") @db.Decimal(18, 2)
+  bronzeMin   Decimal  @default(1000000000) @map("bronze_min") @db.Decimal(18, 2)
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("tier_settings")
@@ -773,11 +799,19 @@ model CrmContact {
   /// `Reception.receptionAt`.
   contactAt   DateTime? @map("contact_at")
 
-  serviceName String?  @map("service_name")
+  /// Free text, kept as the single searchable/exportable rendering of the
+  /// services. Written from `serviceNames` whenever those are supplied, so the
+  /// two never disagree, and still carries the prose the spreadsheet import
+  /// brought in for rows that predate the picker.
+  serviceName  String?  @map("service_name")
+  /// Services picked from the clinic's own catalogue. Structured because
+  /// "which services does this complaint concern" is a question the desk asks
+  /// of the whole table, and free text cannot be grouped or filtered.
+  serviceNames String[] @default([]) @map("service_names")
   /// The sheet recorded money as prose ("۱۰ میلیون و ۹۰۰ هزار تومان"); the
   /// text is kept verbatim and `amount` holds it in Rial when parseable.
-  amountText  String?  @map("amount_text")
-  amount      Decimal? @db.Decimal(18, 2)
+  amountText   String?  @map("amount_text")
+  amount       Decimal? @db.Decimal(18, 2)
 
   schedulingRating CrmRating? @map("scheduling_rating")
   doctorRating     CrmRating? @map("doctor_rating")
@@ -801,11 +835,34 @@ model CrmContact {
   painSwelling       String? @map("pain_swelling")
   delayComplaint     String? @map("delay_complaint")
   positiveNote       String? @map("positive_note")
+  /// Free-text note about the referral. Kept alongside `referredDoctorName`
+  /// rather than replaced by it: the note says *why* the patient was sent on,
+  /// which the name cannot carry.
   doctorReferral     String? @map("doctor_referral")
   patientSummary     String? @map("patient_summary")
   callCenterReferral String? @map("call_center_referral")
   resurveyDate       String? @map("resurvey_date")
   resurveyResult     String? @map("resurvey_result")
+
+  // ─── Referral after consultation, and what came of it ───
+  //
+  // The consultation-to-treatment path is already derivable from billed lines
+  // (see ReferralService), but only after the money lands. These columns record
+  // the desk's own knowledge on the day of the call — who the patient was sent
+  // to, and, once it happens, who actually treated them and with what — so the
+  // handover is reportable before it shows up in the till, and stays reportable
+  // for the referrals that never do.
+
+  /// The doctor the patient was referred to after the consultation.
+  referredDoctorName    String?  @map("referred_doctor_name")
+  /// The doctor who actually delivered the referred treatment. Not assumed to
+  /// equal `referredDoctorName` — the whole point of tracking both is that the
+  /// referral does not always land where it was sent.
+  treatmentDoctorName   String?  @map("treatment_doctor_name")
+  /// The services the patient received from that treatment.
+  treatmentServiceNames String[] @default([]) @map("treatment_service_names")
+  /// Jalali date the referred treatment was performed.
+  treatmentDate         String?  @map("treatment_date")
 
   createdById String?  @map("created_by_id")
   createdAt   DateTime @default(now()) @map("created_at")
@@ -818,6 +875,8 @@ model CrmContact {
   @@index([contactAt])
   @@index([contactDate])
   @@index([doctorName])
+  @@index([referredDoctorName])
+  @@index([treatmentDoctorName])
   @@index([patientExternalCode])
   @@index([patientId])
   @@index([createdById])
@@ -836,4 +895,24 @@ model CrmDoctorSchedule {
 
   @@unique([doctorName, weekday])
   @@map("crm_doctor_schedules")
+}
+
+/// Site-wide display switches.
+///
+/// The clinic hands the dashboard to staff who need the operational side of a
+/// report — which patients to call back, how a doctor is rated — without seeing
+/// what anyone paid. Permissions already decide which *sections* open; these
+/// flags decide whether the figures inside an open section are rendered at all,
+/// which is the part a permission cannot express.
+model DisplaySettings {
+  id             Int      @id @default(1)
+  /// Hide every monetary figure across the whole dashboard.
+  hideAmounts    Boolean  @default(false) @map("hide_amounts")
+  /// Hide monetary figures in the CRM sections only (میز CRM و تحلیل مراجعین).
+  hideCrmAmounts Boolean  @default(false) @map("hide_crm_amounts")
+  /// Hide rates and percentages in the CRM sections (نرخ تبدیل، نرخ بازگشت، …).
+  hideCrmRates   Boolean  @default(false) @map("hide_crm_rates")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("display_settings")
 }

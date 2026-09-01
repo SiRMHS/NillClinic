@@ -7,6 +7,7 @@ import {
   PATIENT_TIER_ORDER,
   type PatientSegment,
   type PatientTier,
+  type PatientVipFlag,
   type TierActivity,
   type TierActivityQuery,
   type TierSettings,
@@ -82,7 +83,9 @@ export class TierService {
       PLATINUM: settings.platinumMin,
       GOLD: settings.goldMin,
       SILVER: settings.silverMin,
-      BRONZE: 1,
+      BRONZE: settings.bronzeMin,
+      // GRAY has no floor by definition — it is everything below BRONZE,
+      // including the refund-only patients whose lifetime total is negative.
       GRAY: null,
     };
 
@@ -292,6 +295,75 @@ export class TierService {
           isUpcoming: Boolean(r.is_upcoming),
         };
       }),
+    };
+  }
+
+  // ─── Manual VIP standing ───
+
+  /**
+   * Assign or clear a patient's hand-given standing.
+   *
+   * The patient's tier is re-derived immediately rather than left to the next
+   * sync: marking someone VIP and then watching them sit in BRONZE until
+   * tomorrow reads as the flag not having worked. Only this patient's row is
+   * touched — a full recompute walks every reception line in the clinic, which
+   * is far too much work for one checkbox.
+   */
+  async setVipFlag(
+    externalCode: number,
+    flag: PatientVipFlag | null,
+    note: string | null,
+    userId: string | null,
+  ): Promise<{ vipFlag: PatientVipFlag | null; vipNote: string | null; tier: PatientTier } | null> {
+    const patient = await prisma.patient.findUnique({
+      where: { externalCode },
+      select: { id: true },
+    });
+    if (!patient) return null;
+
+    const updated = await prisma.patient.update({
+      where: { id: patient.id },
+      data: {
+        vipFlag: flag,
+        vipNote: flag ? note : null,
+        vipSetAt: flag ? new Date() : null,
+        vipSetById: flag ? userId : null,
+      },
+      select: { vipFlag: true, vipNote: true },
+    });
+
+    const settings = await getTierSettings();
+    // Clearing the flag hands the patient back to their spend band, so the tier
+    // is recomputed from the thresholds rather than simply left at PLATINUM.
+    await prisma.$executeRawUnsafe(
+      `UPDATE patient_metrics
+          SET tier = (CASE
+                WHEN $2::text IS NOT NULL          THEN 'PLATINUM'
+                WHEN total_received >= $3::numeric THEN 'PLATINUM'
+                WHEN total_received >= $4::numeric THEN 'GOLD'
+                WHEN total_received >= $5::numeric THEN 'SILVER'
+                WHEN total_received >= $6::numeric THEN 'BRONZE'
+                ELSE 'GRAY' END)::"PatientTier"
+        WHERE patient_id = $1`,
+      patient.id,
+      updated.vipFlag,
+      settings.platinumMin,
+      settings.goldMin,
+      settings.silverMin,
+      settings.bronzeMin,
+    );
+
+    const metrics = await prisma.patientMetrics.findUnique({
+      where: { patientId: patient.id },
+      select: { tier: true },
+    });
+
+    return {
+      vipFlag: updated.vipFlag,
+      vipNote: updated.vipNote,
+      // A patient with no billing history has no metrics row and so no computed
+      // tier; GRAY is what every other surface shows for them.
+      tier: metrics?.tier ?? "GRAY",
     };
   }
 

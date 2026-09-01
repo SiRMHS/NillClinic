@@ -65,7 +65,7 @@ Base: `http://localhost:4000`
 | گزارشات | `analytics`, `analytics.medical`, `analytics.doctors`, `crm`, `crm.desk`, `crm.desk.manage`, `reports.doctors`, `reports.referrals`, `reports.export` |
 | مالی | `financial`, `financial.patients`, `financial.tiers`, `financial.export`, `financial.recompute` |
 | سینک | `sync`, `sync.run`, `sync.settings`, `sync.purge` |
-| سیستم | `settings`, `settings.users`, `settings.roles`, `settings.login-log`, `settings.webhook-logs`, `settings.external-migration`, `settings.leads-log`, `settings.leads-bank` |
+| سیستم | `settings`, `settings.users`, `settings.roles`, `settings.login-log`, `settings.webhook-logs`, `settings.external-migration`, `settings.leads-log`, `settings.leads-bank`, `settings.telephony`, `settings.display` |
 
 ## Analytics (auth required، مجوز `analytics`)
 
@@ -131,15 +131,35 @@ R: ≤۹۰ روز=۵، ≤۱۸۰=۴، ≤۳۶۵=۳، ≤۷۳۰=۲، بیشتر=�
 |--------|------|--------------|
 | GET | `/api/reports/tiers/summary` | — |
 | GET | `/api/reports/tiers/settings` | — |
-| PUT | `/api/reports/tiers/settings` | `{ platinumMin, goldMin, silverMin }` — ذخیره + بازمحاسبه همه بیماران |
+| PUT | `/api/reports/tiers/settings` | `{ platinumMin, goldMin, silverMin, bronzeMin }` — ذخیره + بازمحاسبه همه بیماران |
+| PATCH | `/api/visitors/patient/:externalCode/vip` | `{ vipFlag: "VIP" \| "CELEBRITY" \| null, note? }` — مجوز `patients.vip` |
 | GET | `/api/reports/tiers/activity` | `tiers`, `kind=RECEPTION\|RESERVE`, `upcomingOnly`, `from`, `to`, `doctor`, `search`, `limit`, `offset` |
 | GET | `/api/reports/tiers/activity/stats` | `tiers` |
 | GET | `/api/reports/tiers/activity/export` | همان فیلترها → CSV |
 
 رتبه‌ها: `PLATINUM` (پلاتینیوم)، `GOLD` (طلایی)، `SILVER` (نقره‌ای)، `BRONZE` (برنز)، `GRAY` (خاکستری).
 آستانه‌ها ریالی و **مطلق**‌اند، نه صدکی — تا رتبه یک بیمار با خرجِ بقیه تغییر نکند.
-پیش‌فرض ۵۰۰م / ۲۰۰م / ۵۰م: پلاتینیوم ۳٫۸٪ بیماران ولی ۵۳٪ درآمد.
-`BRONZE` یعنی بیشتر از صفر و کمتر از آستانه نقره‌ای؛ `GRAY` یعنی صفر یا منفی (فقط عودت).
+
+پیش‌فرض‌ها باندهای خودِ کلینیک‌اند. کلینیک آن‌ها را به **تومان** می‌گوید و همه‌جای سیستم
+مبالغ به **ریال** ذخیره می‌شود، پس هر عدد ×۱۰ نگهداری می‌شود
+(`tomanToRial` / `rialToToman` در `@jordan/shared`، و فرم تنظیمات هم به تومان ورودی می‌گیرد):
+
+| رتبه | آستانه (تومان) | ذخیره‌شده (ریال) |
+|------|----------------|------------------|
+| `PLATINUM` | بالای ۱ میلیارد | ۱۰٬۰۰۰٬۰۰۰٬۰۰۰ |
+| `GOLD` | ۶۰۰ میلیون تا ۱ میلیارد | ۶٬۰۰۰٬۰۰۰٬۰۰۰ |
+| `SILVER` | ۳۰۰ تا ۶۰۰ میلیون | ۳٬۰۰۰٬۰۰۰٬۰۰۰ |
+| `BRONZE` | ۱۰۰ تا ۳۰۰ میلیون | ۱٬۰۰۰٬۰۰۰٬۰۰۰ |
+| `GRAY` | کمتر از ۱۰۰ میلیون | — |
+
+`GRAY` دیگر فقط «بدون پرداخت» نیست: هر بیمار زیر آستانه برنز — از جمله بیماران با
+مجموع منفی (فقط عودت) — در این رتبه می‌افتد.
+
+**رتبه ویژه دستی.** `VIP` و `CELEBRITY` را یک نفر تعیین می‌کند، نه خرج بیمار؛ هیچ‌کدام
+در CRM مبدأ وجود ندارند و از مبلغ پرداختی هم مشتق نمی‌شوند. بیمار پرچم‌دار مستقل از
+آستانه‌ها `PLATINUM` می‌شود و بازمحاسبه هرگز او را پایین نمی‌آورد. پرچم روی `patients`
+ذخیره می‌شود (نه در `patient_metrics` که بعد از هر سینک بازساخته می‌شود) و تغییر آن رتبه
+همان بیمار را بی‌درنگ دوباره حساب می‌کند.
 
 `activity` پذیرش‌های انجام‌شده و نوبت‌های رزروشده را در یک جریان می‌آورد و نوبت‌های پیش‌رو
 را اول فهرست می‌گذارد — تنها ردیف‌هایی که هنوز می‌شود رویشان کاری کرد.
@@ -153,10 +173,21 @@ R: ≤۹۰ روز=۵، ≤۱۸۰=۴، ≤۳۶۵=۳، ≤۷۳۰=۲، بیشتر=�
 | GET | `/api/reports/doctors` | `from`, `to` |
 | GET | `/api/reports/doctors/report` | `from`, `to`, `doctors`, `tier`, `serviceKind=all\|consultation\|treatment`, `sort`, `direction`, `limit` |
 | GET | `/api/reports/doctors/trend` | `doctor` (الزامی)، `from`, `to`, `granularity=day\|month\|year` |
-| GET | `/api/reports/doctors/report/export` | همان فیلترها → CSV |
+| GET | `/api/reports/doctors/report/export` | همان فیلترها → CSV خام |
+| GET | `/api/reports/doctors/report/export.xlsx` | همان فیلترها → فایل اکسل قالب‌بندی‌شده |
 | GET | `/api/reports/referrals` | `consultingDoctor`, `treatingDoctors`, `from`, `to`, `tier`, `sort`, `direction`, `limit`, `offset`, `search` |
 | GET | `/api/reports/referrals/export` | همان فیلترها → CSV |
 | GET | `/api/reports/patients/ranking/export` | فیلترهای رتبه‌بندی → CSV |
+
+**دو خروجی، برای دو خواننده.** `export` همان CSV تخت است برای کسی که خودش می‌خواهد
+pivot بگیرد. `export.xlsx` گزارش را به‌عنوان *سند* می‌دهد: سه شیت (خلاصه، رتبه‌بندی
+پزشکان، تفکیک مشاوره و درمان)، سربرگ تیره با عنوان، بازه تاریخ زیر آن، سطر هدر با
+پس‌زمینه خاکستری، ستون‌های با عرض ثابت، قالب عددی `#,##0` برای ریال و `0.0%` برای
+سهم، سطر «جمع»، فریز سطر هدر و جهت راست‌به‌چپ. ساختار در `lib/xlsx.ts` تعریف شده تا
+هر گزارش بعدی هم همان شکل را داشته باشد.
+
+ستون‌های مالی در xlsx هم مثل CSV با روشن‌بودن «مخفی کردن ارقام مالی» **حذف** می‌شوند
+(نه خالی)، و شیت خلاصه هم سطرهای مالی‌اش را از دست می‌دهد.
 
 **کدام ستون «پزشک» است:** `receptions.user_name` کاربر پذیرش است نه پزشک. پزشکِ واقعی
 `reception_items.personnel_name` است — که پول هم همان‌جاست. همه گزارش‌های اینجا روی همان می‌روند.
@@ -185,8 +216,8 @@ R: ≤۹۰ روز=۵، ≤۱۸۰=۴، ≤۳۶۵=۳، ≤۷۳۰=۲، بیشتر=�
 
 | Method | Path | Query / Body |
 |--------|------|--------------|
-| GET | `/api/crm-desk/meta` | — برچسب همه enumها + فهرست پزشکان |
-| GET | `/api/crm-desk/contacts` | `kind`, `from`, `to`, `doctorName`, `callResult`, `segment`, `search`, `page`, `pageSize` |
+| GET | `/api/crm-desk/meta` | — برچسب همه enumها + فهرست پزشکان + `serviceCatalogue` (خدمات کلینیک به تفکیک بخش) |
+| GET | `/api/crm-desk/contacts` | `kind`, `from`, `to`, `doctorName`, `referredDoctorName`, `serviceName`, `callResult`, `segment`, `search`, `page`, `pageSize` |
 | POST | `/api/crm-desk/contacts` | بدنه‌ی `crmContactInputSchema` |
 | GET | `/api/crm-desk/contacts/:id` | — |
 | PATCH | `/api/crm-desk/contacts/:id` | همان بدنه، به‌صورت partial |
@@ -195,8 +226,38 @@ R: ≤۹۰ روز=۵، ≤۱۸۰=۴، ≤۳۶۵=۳، ≤۷۳۰=۲، بیشتر=�
 | GET | `/api/crm-desk/kpi` | `from`, `to`, `kind` |
 | GET | `/api/crm-desk/doctor-scores` | `from`, `to`, `kind` |
 | GET | `/api/crm-desk/doctor-scores/export` | همان فیلترها → CSV |
+| GET | `/api/crm-desk/referrals` | `from`, `to`, `kind` — ارجاع پس از مشاوره بر پایه تماس‌های میز CRM |
+| GET | `/api/crm-desk/referrals/export` | همان فیلترها → CSV |
 | GET | `/api/crm-desk/schedule` | — روزهای حضور پزشکان |
 | PUT | `/api/crm-desk/schedule` | `{ entries: [{ doctorName, weekday, note }] }` — کل جدول یکجا |
+| GET | `/api/crm-desk/schedule/export` | — جدول هفتگی به شکل گرید → CSV |
+| GET | `/api/crm-desk/import/contacts/template` | — قالب خالی ورود تماس‌ها → CSV |
+| GET | `/api/crm-desk/import/schedule/template` | — قالب خالی برنامه هفتگی → CSV |
+| POST | `/api/crm-desk/import/contacts/preview` | `{ csv }` → گزارش سطر‌به‌سطر، بدون نوشتن |
+| POST | `/api/crm-desk/import/contacts/commit` | `{ csv }` → ثبت سطرهای معتبر |
+| POST | `/api/crm-desk/import/schedule/preview` | `{ csv }` → گزارش سطر‌به‌سطر، بدون نوشتن |
+| POST | `/api/crm-desk/import/schedule/commit` | `{ csv, mode: "merge" \| "replace" }` |
+
+**خدمات انتخابی، نه متن آزاد.** `serviceNames` و `treatmentServiceNames` از `serviceCatalogue`
+(همان جدول `services` سینک‌شده) انتخاب می‌شوند، پس یک خدمت در میز CRM و در خط پذیرش یک نام
+دارد و قابل گروه‌بندی است. `serviceName` به‌عنوان تنها شکل متنیِ قابل جستجو و قابل خروجی
+باقی می‌ماند و از روی `serviceNames` نوشته می‌شود، تا این دو هرگز از هم جدا نیفتند؛ ردیف‌های
+قدیمی که فقط متن دارند هم دست‌نخورده می‌مانند.
+
+**ارجاع پس از مشاوره.** `referredDoctorName` (به چه پزشکی ارجاع شد)، `treatmentDoctorName`
+(درمان را چه کسی انجام داد)، `treatmentServiceNames` (چه خدمتی گرفته شد) و `treatmentDate`.
+دو فیلد اول عمداً جدا هستند: ارجاع همیشه همان‌جایی نمی‌نشیند که فرستاده شده. سگمنت‌های
+`referred` و `referred-pending` روی `/contacts` همین را فیلتر می‌کنند.
+
+این گزارش از `/api/reports/referrals` جداست: آن یکی همین مسیر را از خطوط صورتحساب
+بازسازی می‌کند و روی مبالغ معتبر است ولی ارجاعی را که به فاکتور نرسیده نمی‌بیند — و
+دقیقاً همان‌ها هستند که باید پیگیری شوند. این یکی ثبت خودِ میز CRM است و مبلغ ندارد.
+
+**ورود از فایل، دو مرحله‌ای:** `preview` فقط فایل را می‌خواند و برای هر سطر خطا و هشدار
+برمی‌گرداند؛ `commit` همان متن را دوباره در سرور پارس می‌کند و فقط سطرهای معتبر را ثبت
+می‌کند — یعنی مرورگر تصمیم نمی‌گیرد چه چیزی ذخیره شود. سقف هر بارگذاری ۶۰۰۰ سطر و
+۱۲ مگابایت است. ستون‌های محاسباتی (`رضایت کلی`، `ریسک ریزش`، `امتیاز وفاداری`،
+`شاخص NPS`) در ورودی نادیده گرفته می‌شوند چون از روی امتیازها ساخته می‌شوند.
 
 **یک جدول به‌جای یک شیت در ماه:** اکسل برای هر ماه یک شیت تازه می‌ساخت با همان ستون‌ها.
 اینجا `kind` + `contactDate` همان تفکیک را می‌دهد بدون اینکه ماه بعد یک تغییر schema باشد.
@@ -220,6 +281,41 @@ R: ≤۹۰ روز=۵، ≤۱۸۰=۴، ≤۳۶۵=۳، ≤۷۳۰=۲، بیشتر=�
 `scripts/import-crm-workbook.ts` آن را وارد دیتابیس می‌کند. اجرای دوباره امن است:
 ردیف‌های واردشده (آن‌هایی که `created_by_id` ندارند) اول پاک می‌شوند، پس import دوم
 جایگزین می‌شود نه اضافه. چیزی که کاربران در خود برنامه ثبت کرده‌اند دست نمی‌خورد.
+
+## تنظیمات نمایش (auth required)
+
+سه کلید سراسری که تعیین می‌کنند چه ارقامی اصلاً روی سایت نشان داده شوند. این محور
+جدا از RBAC است: دسترسی می‌گوید چه کسی وارد کدام بخش می‌شود، این کلیدها می‌گویند
+داخل همان بخش چه ستون‌هایی دیده شوند — برای وقتی که کارشناس باید در CRM کار کند
+ولی نباید مبلغ پرداختی بیمار را ببیند.
+
+| Method | Path | Body |
+|--------|------|------|
+| GET | `/api/display` | — هر کاربر واردشده (هر صفحه قبل از رندر لازمش دارد) |
+| PUT | `/api/display` | `{ hideAmounts?, hideCrmAmounts?, hideCrmRates? }` — مجوز `settings.display` |
+
+- `hideAmounts` — همه ارقام مالی در کل سایت.
+- `hideCrmAmounts` — فقط در میز CRM و تحلیل مراجعین.
+- `hideCrmRates` — نرخ‌ها و درصدهای بخش CRM.
+
+**مخفی‌سازی در سرور انجام می‌شود، نه در مرورگر:** مقادیر پنهان در پاسخ `null`
+می‌شوند و ستون متناظر از فایل CSV **حذف** می‌شود (نه خالی)، پس کاربر از طریق
+DevTools یا خروجی اکسل هم به عدد نمی‌رسد.
+
+**دامنه: کل `/api`.** ماسک به‌صورت میدل‌ور یک‌جا روی `/api` سوار است
+(`middleware/display.middleware.ts`)، نه روی تک‌تک روت‌ها. قبلاً هر روت خودش
+ماسک را صدا می‌زد: دو روتر این کار را می‌کردند و پانزده‌تا نه — یعنی با روشن‌بودن
+«مخفی کردن همه ارقام مالی»، `/api/financial/*`، `/api/reports/*` و
+`/api/analytics/*` همچنان درآمد کامل برمی‌گرداندند. حالا هر اندپوینت جدید از
+روز اول پوشش دارد، و فهرست فیلدهای پولی در `AMOUNT_FIELDS` یک‌جا نگهداری می‌شود.
+
+کلیدهای مخصوص CRM فقط روی `/api/crm-desk/*` اعمال می‌شوند — چون `/api/visitors/*`
+داشبورد و پرونده بیمار را هم تغذیه می‌کند و ماسک‌کردنش صفحه‌هایی را خالی می‌کرد که
+این کلید درباره آن‌ها حرفی نزده.
+
+**هیچ‌کس معاف نیست، از جمله مدیر سیستم.** استثنای `*` در طراحی اول بود، ولی
+باعث می‌شد سوییچ دقیقاً برای کسی که احتمالاً آن را تست می‌کند بی‌اثر به‌نظر برسد.
+راه برگشت خودِ سوییچ است: هر کسی که می‌تواند روشنش کند می‌تواند خاموشش کند.
 
 ## Sync (auth required، مجوز `sync`)
 
@@ -280,6 +376,12 @@ R: ≤۹۰ روز=۵، ≤۱۸۰=۴، ≤۳۶۵=۳، ≤۷۳۰=۲، بیشتر=�
 | PATCH | `/api/leads/:id/assign` | مجوز `leads.assign` |
 | DELETE | `/api/leads/:id` | مجوز `leads.delete` |
 | POST | `/api/leads/webhook` | `x-webhook-secret` (بدون JWT) |
+
+**دامنه دید هر کارشناس.** `leads` یعنی «لیدهای خودم + لیدهای واگذارنشده»، نه همه
+لیدها؛ `leads.all` قید را برمی‌دارد (سرپرست فروش). قاعده در `lib/lead-scope.ts`
+تعریف شده و روی `/api/campaigns/:id/leads` هم اعمال می‌شود، چون همان داده است و
+`leads` کلید `campaigns` را هم می‌دهد. لیدی که متعلق به شما نیست **۴۰۴** می‌دهد،
+نه ۴۰۳ — تا اندپوینت به ابزار شمارش لیدها تبدیل نشود. جزئیات در `docs/SECURITY.md`.
 
 ### Webhook body (Manychat / n8n)
 

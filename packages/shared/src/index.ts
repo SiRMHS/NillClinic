@@ -6,5 +6,6 @@ export * from "./schemas/financial.js";
 export * from "./schemas/reporting.js";
 export * from "./schemas/crm-desk.js";
 export * from "./schemas/telephony.js";
+export * from "./schemas/display.js";
 export * from "./utils/crm-text.js";
 export * from "./utils/jalali.js";

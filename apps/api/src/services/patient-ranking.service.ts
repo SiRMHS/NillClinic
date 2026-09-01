@@ -6,6 +6,7 @@ import {
   type RankedPatient,
   type PatientSegment,
   type PatientTier,
+  type PatientVipFlag,
   type TierSettings,
 } from "@jordan/shared";
 
@@ -13,11 +14,16 @@ import {
  * Defaults matching the migration, used when the settings row is missing.
  * Recomputing with silently-zero thresholds would flatten every patient into
  * PLATINUM, so the fallback is the real default rather than an empty object.
+ *
+ * Rial, being the unit every amount in this system is stored in. The clinic
+ * states these bands in Toman — ۱ میلیارد / ۶۰۰ / ۳۰۰ / ۱۰۰ میلیون — so each
+ * figure here is that number times ten.
  */
 const DEFAULT_TIER_THRESHOLDS = {
-  platinumMin: 500_000_000,
-  goldMin: 200_000_000,
-  silverMin: 50_000_000,
+  platinumMin: 10_000_000_000,
+  goldMin: 6_000_000_000,
+  silverMin: 3_000_000_000,
+  bronzeMin: 1_000_000_000,
 } as const;
 
 /** Read the single editable thresholds row. */
@@ -28,6 +34,7 @@ export async function getTierSettings(): Promise<TierSettings> {
     platinumMin: Number(row.platinumMin),
     goldMin: Number(row.goldMin),
     silverMin: Number(row.silverMin),
+    bronzeMin: Number(row.bronzeMin),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -90,6 +97,7 @@ export class PatientRankingService {
       ),
       dated AS (
         SELECT p.id AS patient_id, a.*,
+               p.vip_flag,
                GREATEST(0, ($1::timestamp)::date - a.last_visit_at::date) AS recency_days
         FROM agg a
         JOIN patients p ON p.external_code = a.code
@@ -125,12 +133,21 @@ export class PatientRankingService {
           -- Absolute rial bands from tier_settings. Unlike monetary_score this
           -- is not a quintile: a patient must not be demoted because other
           -- patients spent more, only because their own spend is lower.
-          -- GRAY covers <= 0, which includes the ~3.2k refund-only patients
-          -- whose lifetime total is negative.
-          CASE WHEN d.total_received >= $2::numeric THEN 'PLATINUM'
+          --
+          -- A hand-assigned VIP or celebrity is PLATINUM whatever the till
+          -- says. That is the entire point of the manual flag: the clinic has
+          -- patients it wants treated as top-tier for reasons spend cannot
+          -- express, and a recompute must not quietly demote them the next time
+          -- it runs.
+          --
+          -- GRAY is now everything under bronze_min rather than only
+          -- non-payers, so it holds low-spend patients as well as the ~3.2k
+          -- refund-only ones whose lifetime total is negative.
+          CASE WHEN d.vip_flag IS NOT NULL          THEN 'PLATINUM'
+               WHEN d.total_received >= $2::numeric THEN 'PLATINUM'
                WHEN d.total_received >= $3::numeric THEN 'GOLD'
                WHEN d.total_received >= $4::numeric THEN 'SILVER'
-               WHEN d.total_received >  0           THEN 'BRONZE'
+               WHEN d.total_received >= $5::numeric THEN 'BRONZE'
                ELSE 'GRAY' END                            AS tier
         FROM dated d
       )
@@ -210,6 +227,7 @@ export class PatientRankingService {
       thresholds.platinumMin,
       thresholds.goldMin,
       thresholds.silverMin,
+      thresholds.bronzeMin,
     );
 
     return { patients: affected, durationMs: Date.now() - started };
@@ -275,7 +293,8 @@ export class PatientRankingService {
          m.avg_ticket::text AS avg_ticket,
          m.first_visit_date, m.last_visit_date, m.recency_days,
          m.recency_score, m.frequency_score, m.monetary_score,
-         m.rfm_score, m.segment::text AS segment, m.tier::text AS tier
+         m.rfm_score, m.segment::text AS segment, m.tier::text AS tier,
+         p.vip_flag::text AS vip_flag
        FROM patient_metrics m
        JOIN patients p ON p.id = m.patient_id
        ${whereSql}
@@ -317,6 +336,7 @@ export class PatientRankingService {
           segmentLabel: PATIENT_SEGMENT_LABELS[segment] ?? segment,
           tier,
           tierLabel: PATIENT_TIER_LABELS[tier] ?? tier,
+          vipFlag: r.vip_flag === null ? null : (String(r.vip_flag) as PatientVipFlag),
         };
       }),
     };

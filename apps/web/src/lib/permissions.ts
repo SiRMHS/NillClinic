@@ -43,6 +43,7 @@ export const SECTIONS: SectionDef[] = [
   { url: "/settings/users", title: "کاربران و نقش‌ها", anyOf: ["settings.users", "settings.roles"], group: "settings" },
   { url: "/settings/login-log", title: "گزارش ورود", anyOf: ["settings.login-log"], group: "settings" },
   { url: "/settings/telephony", title: "تنظیمات تلفن", anyOf: ["settings.telephony"], group: "settings" },
+  { url: "/settings/display", title: "تنظیمات نمایش", anyOf: ["settings.display"], group: "settings" },
 ]
 
 /**

@@ -256,7 +256,14 @@ export const crmContactInputSchema = z.object({
   visitDate: jalaliDate.optional().nullable(),
   contactDate: jalaliDate,
 
+  /**
+   * The services as one string. Derived from `serviceNames` when those are
+   * given, so a client that only sends the picked list never has to build the
+   * text itself — and rows imported from the spreadsheet keep their prose.
+   */
   serviceName: optionalText,
+  /** Services picked from the clinic's catalogue. */
+  serviceNames: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
   /** The spreadsheet recorded amounts as prose ("۱۰ میلیون و ۹۰۰ هزار تومان"). */
   amountText: optionalText,
   amount: z.coerce.number().nonnegative().optional().nullable(),
@@ -285,11 +292,21 @@ export const crmContactInputSchema = z.object({
   painSwelling: optionalText,
   delayComplaint: optionalText,
   positiveNote: optionalText,
+  /** Why the patient was referred on — the note beside `referredDoctorName`. */
   doctorReferral: optionalText,
   patientSummary: optionalText,
   callCenterReferral: optionalText,
   resurveyDate: jalaliDate.optional().nullable(),
   resurveyResult: optionalText,
+
+  // ─── Referral after consultation ───
+  /** The doctor the patient was referred to. */
+  referredDoctorName: z.string().trim().max(200).optional().nullable(),
+  /** The doctor who actually delivered the referred treatment. */
+  treatmentDoctorName: z.string().trim().max(200).optional().nullable(),
+  /** What the patient received from that treatment. */
+  treatmentServiceNames: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+  treatmentDate: jalaliDate.optional().nullable(),
 });
 
 export type CrmContactInput = z.infer<typeof crmContactInputSchema>;
@@ -301,9 +318,26 @@ export const crmContactQuerySchema = z.object({
   from: jalaliDate.optional(),
   to: jalaliDate.optional(),
   doctorName: z.string().trim().optional(),
+  /** Narrows to contacts referred on to this doctor. */
+  referredDoctorName: z.string().trim().optional(),
+  /** Narrows to contacts naming this service, on either the visit or the referral. */
+  serviceName: z.string().trim().optional(),
   callResult: crmCallResultSchema.optional(),
   /** "risky" narrows to the rows the desk is meant to act on today. */
-  segment: z.enum(["all", "risky", "unanswered", "rebook", "promoters", "detractors"]).default("all"),
+  segment: z
+    .enum([
+      "all",
+      "risky",
+      "unanswered",
+      "rebook",
+      "promoters",
+      "detractors",
+      /** Referred on to a named doctor, whatever came of it. */
+      "referred",
+      /** Referred on and the treatment is still not recorded — the desk's queue. */
+      "referred-pending",
+    ])
+    .default("all"),
   search: z.string().trim().max(120).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),

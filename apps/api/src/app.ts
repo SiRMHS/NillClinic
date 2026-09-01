@@ -17,7 +17,9 @@ import { webhookLogsRouter } from "./routes/webhook-logs.routes.js";
 import { securityRouter } from "./routes/security.routes.js";
 import { crmDeskRouter } from "./routes/crm-desk.routes.js";
 import { telephonyRouter } from "./routes/telephony.routes.js";
+import { displayRouter } from "./routes/display.routes.js";
 import { requireAuth } from "./middleware/auth.middleware.js";
+import { maskDisplayFields } from "./middleware/display.middleware.js";
 import { csrfProtection } from "./middleware/csrf.middleware.js";
 import { apiRateLimit, webhookRateLimit } from "./middleware/rate-limit.middleware.js";
 import { errorHandler } from "./middleware/error.middleware.js";
@@ -75,6 +77,11 @@ app.use(
   }),
 );
 
+// CSV uploads arrive as a JSON string body, and a full CRM export runs to a
+// few megabytes — well past what the rest of the API has any business
+// accepting. The larger limit is scoped to the import endpoints alone.
+app.use("/api/crm-desk/import", express.json({ limit: "12mb" }));
+
 app.use(express.json({ limit: "1mb" }));
 
 // Rejects state-changing cookie-authenticated requests that do not echo the
@@ -88,6 +95,19 @@ app.use("/health", healthRouter);
 app.use("/api/auth", authRouter);
 
 app.use("/api", apiRateLimit);
+
+/**
+ * Site-wide figure masking, ahead of every router.
+ *
+ * Registered once rather than per route because "hide the money" has to mean
+ * every section, including the ones written after the switch was — see
+ * display.middleware.ts. Deliberately *without* `requireAuth`: the lead webhook
+ * below is unauthenticated, and wrapping the whole prefix in auth here would
+ * shut it out. The mask reads `req.user` when the response is sent, by which
+ * point each router's own `requireAuth` has run.
+ */
+app.use("/api", maskDisplayFields);
+
 app.use("/api/analytics", requireAuth, analyticsRouter);
 app.use("/api/financial", requireAuth, financialRouter);
 app.use("/api/reports", requireAuth, reportsRouter);
@@ -103,5 +123,6 @@ app.use("/api/webhook-logs", requireAuth, webhookLogsRouter);
 app.use("/api/security", requireAuth, securityRouter);
 app.use("/api/crm-desk", requireAuth, crmDeskRouter);
 app.use("/api/telephony", requireAuth, telephonyRouter);
+app.use("/api/display", requireAuth, displayRouter);
 
 app.use(errorHandler);

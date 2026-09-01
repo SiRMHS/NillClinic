@@ -76,11 +76,11 @@ const PAGE_SIZE = 50
 
 /** What each tier means, in the clinic's own terms. */
 const TIER_HINT: Record<PatientTier, string> = {
-  PLATINUM: "بالاترین سطح خرج — کوچک‌ترین گروه، بیشترین درآمد",
+  PLATINUM: "بالاترین سطح خرج — و بیمارانی که دستی VIP یا سلبریتی شده‌اند",
   GOLD: "خرج بالا و مستمر",
   SILVER: "خرج متوسط، جای رشد دارند",
-  BRONZE: "خرج کم ولی بیش از صفر",
-  GRAY: "بدون پرداخت ثبت‌شده",
+  BRONZE: "خرج کم، بالاتر از آستانه برنز",
+  GRAY: "کمتر از آستانه برنز یا بدون پرداخت",
 }
 
 export default function TiersPage() {
@@ -256,7 +256,7 @@ function TiersContent() {
                 {s.minSpend !== null ? (
                   <span className="block">از {formatRial(s.minSpend)} ریال به بالا</span>
                 ) : (
-                  <span className="block">بدون پرداخت</span>
+                  <span className="block">کمتر از آستانه برنز</span>
                 )}
               </div>
               {s.atRiskCount > 0 ? (

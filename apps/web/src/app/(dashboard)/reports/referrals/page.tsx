@@ -31,6 +31,7 @@ interface ReferralPatient {
   consultationDate: string | null
   consultationCount: number
   treatingDoctors: string[]
+  treatmentServices: string[]
   treatmentCount: number
   treatmentReceived: number
   consultingDoctorReceived: number
@@ -390,6 +391,7 @@ export default function ReferralsPage() {
                     <TableHead className="text-right">رتبه</TableHead>
                     <SortableHead label="تاریخ مشاوره" sortKey="consultationDate" sort={sort} onSort={onSort} />
                     <TableHead className="text-right">پزشک درمان</TableHead>
+                    <TableHead className="text-right">خدمت گرفته‌شده</TableHead>
                     <SortableHead label="تعداد درمان" sortKey="treatmentCount" sort={sort} onSort={onSort} />
                     <SortableHead label="درآمد درمان" sortKey="treatmentReceived" sort={sort} onSort={onSort} />
                     <SortableHead label="مجموع خرید" sortKey="lifetimeSpend" sort={sort} onSort={onSort} />
@@ -433,6 +435,38 @@ export default function ReferralsPage() {
                             </span>
                           ) : null}
                         </div>
+                      </TableCell>
+                      {/*
+                        Which procedures the handover actually consisted of. The
+                        doctor column alone says a patient went elsewhere and
+                        paid; this says whether they got the treatment the
+                        consultation was about. Two shown, the rest on hover —
+                        the full list is in the CSV export.
+                      */}
+                      <TableCell className="max-w-[220px]">
+                        {p.treatmentServices.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {p.treatmentServices.slice(0, 2).map((svc) => (
+                              <span
+                                key={svc}
+                                className="max-w-[140px] truncate rounded bg-muted px-1.5 py-0.5 text-xs"
+                                title={svc}
+                              >
+                                {svc}
+                              </span>
+                            ))}
+                            {p.treatmentServices.length > 2 ? (
+                              <span
+                                className="text-xs text-muted-foreground"
+                                title={p.treatmentServices.slice(2).join("، ")}
+                              >
+                                +{toPersianNum(p.treatmentServices.length - 2)}
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="tabular-nums">
                         {formatCount(p.treatmentCount)}

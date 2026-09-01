@@ -16,9 +16,12 @@ import {
   CRM_CALL_RESULT_LABELS, CRM_CHANNEL_LABELS, CRM_CONTACT_KIND_LABELS,
   CRM_LIKELIHOOD_LABELS, CRM_RATING_FIELDS, CRM_RATING_LABELS,
   jalaliToday,
+  splitCrmLabels,
   type CrmCallResult, type CrmChannel, type CrmContactKind,
   type CrmLikelihood, type CrmRating,
 } from "@jordan/shared"
+import { useCrmMasking } from "@/stores/display.store"
+import { ServicePicker, type ServiceSection } from "./service-picker"
 import type { CrmContact } from "./types"
 
 /** `null` clears the field on the server; `undefined` leaves it untouched. */
@@ -99,6 +102,8 @@ export interface ContactDialogProps {
   contact: CrmContact | null
   defaultKind: CrmContactKind
   doctors: string[]
+  /** The clinic's service list, grouped by section — see ServicePicker. */
+  serviceCatalogue: ServiceSection[]
   onSubmit: (payload: Draft, id: string | null) => Promise<void>
 }
 
@@ -119,7 +124,7 @@ export function ContactDialog({ open, onOpenChange, ...rest }: ContactDialogProp
 }
 
 function ContactForm({
-  onOpenChange, contact, defaultKind, doctors, onSubmit,
+  onOpenChange, contact, defaultKind, doctors, serviceCatalogue, onSubmit,
 }: Omit<ContactDialogProps, "open">) {
   const [saving, setSaving] = useState(false)
   const [kind, setKind] = useState<CrmContactKind>(contact?.kind ?? defaultKind)
@@ -129,8 +134,23 @@ function ContactForm({
   const [doctorName, setDoctorName] = useState(contact?.doctorName ?? "")
   const [visitDate, setVisitDate] = useState(contact?.visitDate ?? "")
   const [contactDate, setContactDate] = useState(contact?.contactDate ?? jalaliToday())
-  const [serviceName, setServiceName] = useState(contact?.serviceName ?? "")
+  /**
+   * Picked services, falling back to splitting the old free-text column.
+   *
+   * Rows recorded before the picker existed — and everything the spreadsheet
+   * import brought in — have `serviceName` and an empty `serviceNames`. Opening
+   * one of those for editing has to show its services, otherwise saving an
+   * unrelated correction would silently blank them.
+   */
+  const [serviceNames, setServiceNames] = useState<string[]>(
+    contact?.serviceNames?.length ? contact.serviceNames : splitCrmLabels(contact?.serviceName),
+  )
   const [amountText, setAmountText] = useState(contact?.amountText ?? "")
+  // When the site hides CRM money, the amount never reached this dialog — the
+  // API stripped it. The field is therefore not shown, and, crucially, the key
+  // is left out of the payload entirely: sending the empty box back would
+  // erase an amount the editor was never allowed to read.
+  const { amounts: amountsHidden } = useCrmMasking()
   const [ratings, setRatings] = useState<Record<string, CrmRating | null>>({
     schedulingRating: contact?.schedulingRating ?? null,
     doctorRating: contact?.doctorRating ?? null,
@@ -151,7 +171,7 @@ function ContactForm({
   const [showAdvanced, setShowAdvanced] = useState(
     Boolean(
       contact?.painSwelling || contact?.delayComplaint || contact?.positiveNote ||
-      contact?.doctorReferral || contact?.patientSummary || contact?.callCenterReferral ||
+      contact?.patientSummary || contact?.callCenterReferral ||
       contact?.resurveyDate || contact?.resurveyResult,
     ),
   )
@@ -163,6 +183,19 @@ function ContactForm({
   const [callCenterReferral, setCallCenterReferral] = useState(contact?.callCenterReferral ?? "")
   const [resurveyDate, setResurveyDate] = useState(contact?.resurveyDate ?? "")
   const [resurveyResult, setResurveyResult] = useState(contact?.resurveyResult ?? "")
+
+  // ─── Referral after consultation ───
+  const [referredDoctorName, setReferredDoctorName] = useState(contact?.referredDoctorName ?? "")
+  const [treatmentDoctorName, setTreatmentDoctorName] = useState(contact?.treatmentDoctorName ?? "")
+  const [treatmentServiceNames, setTreatmentServiceNames] = useState<string[]>(
+    contact?.treatmentServiceNames ?? [],
+  )
+  const [treatmentDate, setTreatmentDate] = useState(contact?.treatmentDate ?? "")
+  // Opened when the row already carries a referral, so an existing one is never
+  // hidden behind a collapsed section the editor has to know to expand.
+  const [showReferral, setShowReferral] = useState(
+    Boolean(contact?.referredDoctorName || contact?.treatmentDoctorName || contact?.doctorReferral),
+  )
 
 
   const trimmed = (v: string) => (v.trim() === "" ? null : v.trim())
@@ -181,8 +214,8 @@ function ContactForm({
           doctorName: trimmed(doctorName),
           visitDate: trimmed(visitDate),
           contactDate,
-          serviceName: trimmed(serviceName),
-          amountText: trimmed(amountText),
+          serviceNames,
+          ...(amountsHidden ? {} : { amountText: trimmed(amountText) }),
           ...ratings,
           referralLikelihood,
           revisitLikelihood,
@@ -202,6 +235,10 @@ function ContactForm({
           callCenterReferral: trimmed(callCenterReferral),
           resurveyDate: trimmed(resurveyDate),
           resurveyResult: trimmed(resurveyResult),
+          referredDoctorName: trimmed(referredDoctorName),
+          treatmentDoctorName: trimmed(treatmentDoctorName),
+          treatmentServiceNames,
+          treatmentDate: trimmed(treatmentDate),
         },
         contact?.id ?? null,
       )
@@ -276,23 +313,41 @@ function ContactForm({
             </datalist>
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="service" className="text-xs text-muted-foreground">خدمات انجام شده</Label>
-            <Input id="service" value={serviceName} onChange={(e) => setServiceName(e.target.value)} />
+            <Label htmlFor="referredDoctor" className="text-xs text-muted-foreground">
+              ارجاع به پزشک
+            </Label>
+            <Input
+              id="referredDoctor"
+              list="crm-doctor-list"
+              value={referredDoctorName}
+              onChange={(e) => setReferredDoctorName(e.target.value)}
+              placeholder="در صورت ارجاع پس از مشاوره"
+            />
           </div>
         </div>
+
+        <ServicePicker
+          label="خدمات انجام شده"
+          hint="از فهرست خدمات کلینیک انتخاب کنید — همان نام‌هایی که در پذیرش ثبت می‌شود."
+          catalogue={serviceCatalogue}
+          value={serviceNames}
+          onChange={setServiceNames}
+        />
 
         <div className="grid gap-3 sm:grid-cols-3">
           <JalaliDatePicker label="تاریخ مراجعه" value={visitDate} onChange={setVisitDate} />
           <JalaliDatePicker label="تاریخ تماس" value={contactDate} onChange={setContactDate} />
-          <div className="grid gap-1.5">
-            <Label htmlFor="amount" className="text-xs text-muted-foreground">مبلغ دریافت شده</Label>
-            <Input
-              id="amount"
-              value={amountText}
-              onChange={(e) => setAmountText(e.target.value)}
-              placeholder="مثلاً ۱۰ میلیون و ۹۰۰ هزار تومان"
-            />
-          </div>
+          {!amountsHidden && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="amount" className="text-xs text-muted-foreground">مبلغ دریافت شده</Label>
+              <Input
+                id="amount"
+                value={amountText}
+                onChange={(e) => setAmountText(e.target.value)}
+                placeholder="مثلاً ۱۰ میلیون و ۹۰۰ هزار تومان"
+              />
+            </div>
+          )}
         </div>
 
         <div className="rounded-lg border p-3">
@@ -362,18 +417,69 @@ function ContactForm({
           </div>
         )}
 
-        <div>
+        {/*
+          Referral outcome. Collapsed by default because most follow-up calls are
+          not referrals, and the five fields would otherwise push the ratings —
+          which every call fills in — below the fold.
+        */}
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowReferral((v) => !v)}>
+            {showReferral ? "بستن درمان ارجاعی" : "درمان ارجاعی (اختیاری)"}
+          </Button>
           <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdvanced((v) => !v)}>
             {showAdvanced ? "بستن جزییات تماس" : "جزییات تماس (اختیاری)"}
           </Button>
         </div>
+
+        {showReferral && (
+          <div className="grid gap-3 rounded-lg border p-3">
+            <p className="text-xs font-medium text-muted-foreground">
+              درمان ارجاعی — پس از ارجاع، نزد کدام پزشک انجام شد و چه خدمتی گرفته شد
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="treatDoctor" className="text-xs text-muted-foreground">
+                  درمان توسط
+                </Label>
+                <Input
+                  id="treatDoctor"
+                  list="crm-doctor-list"
+                  value={treatmentDoctorName}
+                  onChange={(e) => setTreatmentDoctorName(e.target.value)}
+                  placeholder="پزشکی که درمان را انجام داد"
+                />
+              </div>
+              <JalaliDatePicker
+                label="تاریخ درمان"
+                value={treatmentDate}
+                onChange={setTreatmentDate}
+              />
+              <div className="grid gap-1.5">
+                <Label htmlFor="refernote" className="text-xs text-muted-foreground">
+                  علت ارجاع
+                </Label>
+                <Input
+                  id="refernote"
+                  value={doctorReferral}
+                  onChange={(e) => setDoctorReferral(e.target.value)}
+                />
+              </div>
+            </div>
+            <ServicePicker
+              label="خدمات گرفته‌شده در درمان ارجاعی"
+              catalogue={serviceCatalogue}
+              value={treatmentServiceNames}
+              onChange={setTreatmentServiceNames}
+              emptyHint="هنوز خدمتی ثبت نشده"
+            />
+          </div>
+        )}
 
         {showAdvanced && (
           <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-2">
             <TextArea id="pain" label="درد / ورم" value={painSwelling} onChange={setPainSwelling} />
             <TextArea id="delay" label="تاخیر" value={delayComplaint} onChange={setDelayComplaint} />
             <TextArea id="positive" label="نکته مثبت" value={positiveNote} onChange={setPositiveNote} />
-            <TextArea id="refer" label="ارجاع به پزشک" value={doctorReferral} onChange={setDoctorReferral} />
             <TextArea id="summary" label="خلاصه حرف بیمار" value={patientSummary} onChange={setPatientSummary} rows={3} />
             <TextArea id="callcenter" label="ارجاع به کال‌سنتر" value={callCenterReferral} onChange={setCallCenterReferral} />
             <JalaliDatePicker label="تاریخ رضایت‌سنجی مجدد" value={resurveyDate} onChange={setResurveyDate} />

@@ -8,7 +8,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { CalendarClock, Receipt, Stethoscope } from "lucide-react"
+import { CalendarClock, Crown, Receipt, Stethoscope } from "lucide-react"
+import { toast } from "sonner"
+import { Input } from "@/components/ui/input"
+import { PATIENT_VIP_FLAG_LABELS, TierBadge, VipBadge } from "@/components/tier-badge"
+import { useAuth } from "@/stores/auth.store"
+import type { PatientTier, PatientVipFlag } from "@jordan/shared"
 
 interface PatientDetail {
   patient: {
@@ -19,6 +24,11 @@ interface PatientDetail {
     gender: number | null
     birthDate: string | null
     job: string | null
+    /** Hand-assigned standing. Null for the overwhelming majority of patients. */
+    vipFlag: PatientVipFlag | null
+    vipNote: string | null
+    vipSetAt: string | null
+    tier: PatientTier | null
   }
   metrics: {
     visitCount: number
@@ -63,6 +73,96 @@ const SEGMENT_LABELS: Record<string, string> = {
 
 const GENDER_LABELS: Record<number, string> = { 20: "مرد", 21: "زن" }
 
+/**
+ * Assign or clear a patient's manual VIP / celebrity standing.
+ *
+ * Three plain buttons rather than a select plus a save button: the whole
+ * interaction is one choice out of three, and the note is the only thing worth
+ * typing. Saving re-tiers this patient server-side, so the caller is handed the
+ * resulting tier back rather than being left to guess it.
+ */
+function VipControl({
+  externalCode,
+  flag,
+  note,
+  onChanged,
+}: {
+  externalCode: number
+  flag: PatientVipFlag | null
+  note: string | null
+  onChanged: (next: { vipFlag: PatientVipFlag | null; vipNote: string | null; tier: PatientTier }) => void
+}) {
+  const [draftNote, setDraftNote] = useState(note ?? "")
+  const [saving, setSaving] = useState(false)
+
+  const apply = async (next: PatientVipFlag | null) => {
+    if (saving) return
+    setSaving(true)
+    try {
+      const result = await apiFetch<{
+        vipFlag: PatientVipFlag | null
+        vipNote: string | null
+        tier: PatientTier
+      }>(`/api/visitors/patient/${externalCode}/vip`, {
+        method: "PATCH",
+        body: JSON.stringify({ vipFlag: next, note: draftNote.trim() || null }),
+      })
+      onChanged(result)
+      setDraftNote(result.vipNote ?? "")
+      toast.success(next === null ? "رتبه ویژه برداشته شد" : "رتبه ویژه ثبت شد")
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "ثبت رتبه ویژه ناموفق بود")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const OPTIONS: { value: PatientVipFlag | null; label: string }[] = [
+    { value: null, label: "عادی" },
+    { value: "VIP", label: PATIENT_VIP_FLAG_LABELS.VIP },
+    { value: "CELEBRITY", label: PATIENT_VIP_FLAG_LABELS.CELEBRITY },
+  ]
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md border p-2.5">
+      <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Crown className="size-3.5" /> رتبه ویژه دستی
+      </span>
+      <div className="flex gap-1">
+        {OPTIONS.map((option) => (
+          <button
+            key={option.label}
+            type="button"
+            disabled={saving}
+            onClick={() => void apply(option.value)}
+            className={`rounded-full border px-3 py-1 text-xs transition-colors disabled:opacity-50 ${
+              flag === option.value
+                ? "border-primary bg-primary/10 font-medium text-primary"
+                : "border-input text-muted-foreground hover:bg-accent"
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <Input
+        value={draftNote}
+        onChange={(e) => setDraftNote(e.target.value)}
+        placeholder="یادداشت (اختیاری) — با انتخاب رتبه ذخیره می‌شود"
+        className="h-8 min-w-0 flex-1 text-xs"
+        disabled={saving}
+      />
+      {/*
+        Says out loud what the flag does to the ranking, because the tier column
+        elsewhere would otherwise look like it had been computed wrong.
+      */}
+      <p className="w-full text-xs text-muted-foreground">
+        بیمار VIP یا سلبریتی، مستقل از مبلغ پرداختی، در رتبه پلاتینیوم قرار می‌گیرد.
+      </p>
+    </div>
+  )
+}
+
 export function PatientDetailDialog({
   externalCode,
   open,
@@ -75,6 +175,15 @@ export function PatientDetailDialog({
   const [data, setData] = useState<PatientDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * Mirrored out of `data` so the badge in the header updates the moment the
+   * control saves, without refetching the whole record — the visits, services
+   * and appointments below are unaffected by a VIP flag.
+   */
+  const [vipFlag, setVipFlag] = useState<PatientVipFlag | null>(null)
+
+  const permissions = useAuth((s) => s.user?.permissions)
+  const canSetVip = !!permissions?.some((p) => p === "*" || p === "patients" || p === "patients.vip")
 
   useEffect(() => {
     if (!open || externalCode === null) return
@@ -82,10 +191,13 @@ export function PatientDetailDialog({
     setLoading(true)
     setError(null)
     setData(null)
+    setVipFlag(null)
 
     apiFetch<PatientDetail>(`/api/visitors/patient/${externalCode}`)
       .then((d) => {
-        if (active) setData(d)
+        if (!active) return
+        setData(d)
+        setVipFlag(d.patient.vipFlag)
       })
       .catch((e) => {
         if (active) setError(e instanceof Error ? e.message : "خطا در دریافت اطلاعات بیمار")
@@ -126,6 +238,8 @@ export function PatientDetailDialog({
             ) : (
               <>
                 <span>{data?.patient.fullName ?? "بیمار"}</span>
+                {data?.patient.tier ? <TierBadge tier={data.patient.tier} /> : null}
+                <VipBadge flag={vipFlag} />
                 {m ? <Badge variant="secondary">{SEGMENT_LABELS[m.segment] ?? m.segment}</Badge> : null}
               </>
             )}
@@ -152,6 +266,25 @@ export function PatientDetailDialog({
               {data.patient.birthDate ? <span>تولد: {toPersianNum(data.patient.birthDate)}</span> : null}
               {data.patient.job ? <span>شغل: {data.patient.job}</span> : null}
             </div>
+
+            {canSetVip ? (
+              <VipControl
+                externalCode={data.patient.externalCode}
+                flag={vipFlag}
+                note={data.patient.vipNote}
+                onChanged={(next) => {
+                  setVipFlag(next.vipFlag)
+                  // The tier is re-derived server-side the moment the flag
+                  // changes, so the badge beside the name has to follow it —
+                  // otherwise the header still reads BRONZE next to a fresh VIP.
+                  setData((d) =>
+                    d ? { ...d, patient: { ...d.patient, tier: next.tier, vipNote: next.vipNote } } : d,
+                  )
+                }}
+              />
+            ) : vipFlag && data.patient.vipNote ? (
+              <p className="text-xs text-muted-foreground">یادداشت رتبه ویژه: {data.patient.vipNote}</p>
+            ) : null}
 
             {m ? (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">

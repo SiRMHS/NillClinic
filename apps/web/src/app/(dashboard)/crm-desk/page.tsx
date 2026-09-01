@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { apiDownload, apiFetch } from "@/lib/api-client"
-import { formatCount, formatRial, toPersianNum } from "@/lib/format"
+import { MASKED_FIGURE, formatCount, formatRial, toPersianNum } from "@/lib/format"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,9 +14,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { DateRangeFilter, type DateRange } from "@/components/ui/date-range-filter"
 import { ContactDialog } from "@/components/crm-desk/contact-dialog"
+import { ImportDialog, type ImportKind } from "@/components/crm-desk/import-dialog"
+import { useCrmMasking } from "@/stores/display.store"
+import type { ServiceSection } from "@/components/crm-desk/service-picker"
 import {
   NPS_TONE, RISK_TONE, ratingTone,
-  type ContactsResponse, type CrmContact, type CrmKpi,
+  type ContactsResponse, type CrmContact, type CrmKpi, type CrmReferralReport,
   type DoctorScore, type ScheduleEntry,
 } from "@/components/crm-desk/types"
 import { cn } from "@/lib/utils"
@@ -30,10 +33,12 @@ import {
 import {
   AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Download, Gauge,
   HeartHandshake, PhoneCall, Plus, RefreshCw, Repeat, Search, Stethoscope,
-  Trash2, TrendingUp, Users,
+  Trash2, TrendingUp, Upload, Users,
 } from "lucide-react"
 
-type Segment = "all" | "risky" | "unanswered" | "rebook" | "promoters" | "detractors"
+type Segment =
+  | "all" | "risky" | "unanswered" | "rebook" | "promoters" | "detractors"
+  | "referred" | "referred-pending"
 
 const SEGMENT_LABELS: Record<Segment, string> = {
   all: "همه",
@@ -42,6 +47,8 @@ const SEGMENT_LABELS: Record<Segment, string> = {
   rebook: "درخواست وقت مجدد",
   promoters: "مروج‌ها",
   detractors: "منتقدها",
+  referred: "ارجاع‌شده",
+  "referred-pending": "ارجاع بدون درمان",
 }
 
 const PAGE_SIZE = 25
@@ -101,6 +108,40 @@ function ScoreBar({ label, value, responses }: { label: string; value: number | 
   )
 }
 
+/**
+ * A ranked "name (count)" list inside a table cell.
+ *
+ * The referral report answers three "who / what" questions per row, each of
+ * which is a short ranked list rather than a single value — a doctor takes
+ * referrals from several colleagues and delivers several services. Shown as
+ * chips with the count attached, trimmed to the leading few so one busy doctor
+ * does not stretch the row past the page.
+ */
+function NameCounts({ items, limit = 3 }: { items: { name: string; count: number }[]; limit?: number }) {
+  if (items.length === 0) return <span className="text-xs text-muted-foreground">—</span>
+  const shown = items.slice(0, limit)
+  return (
+    <div className="flex flex-wrap gap-1">
+      {shown.map((item) => (
+        <Badge key={item.name} variant="secondary" className="gap-1 text-xs font-normal whitespace-nowrap">
+          {item.name}
+          <span className="tabular-nums opacity-70">{toPersianNum(item.count)}</span>
+        </Badge>
+      ))}
+      {items.length > shown.length ? (
+        // Titled rather than expandable: the remainder is a long tail of
+        // one-offs, and the full list is in the CSV export.
+        <span
+          className="text-xs text-muted-foreground"
+          title={items.slice(limit).map((i) => `${i.name} (${i.count})`).join("، ")}
+        >
+          +{toPersianNum(items.length - shown.length)}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
 function dash(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === "") return "—"
   return typeof value === "number" ? toPersianNum(value) : value
@@ -112,7 +153,9 @@ export default function CrmDeskPage() {
 
   const [kpi, setKpi] = useState<CrmKpi | null>(null)
   const [scores, setScores] = useState<DoctorScore[]>([])
+  const [referrals, setReferrals] = useState<CrmReferralReport | null>(null)
   const [doctors, setDoctors] = useState<string[]>([])
+  const [serviceCatalogue, setServiceCatalogue] = useState<ServiceSection[]>([])
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([])
   const [loadingAgg, setLoadingAgg] = useState(true)
 
@@ -129,6 +172,11 @@ export default function CrmDeskPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<CrmContact | null>(null)
   const [defaultKind, setDefaultKind] = useState<CrmContactKind>("FOLLOW_UP")
+  const [importKind, setImportKind] = useState<ImportKind | null>(null)
+
+  // The API has already stripped whatever these hide; the page still needs to
+  // know, so a masked column is dropped rather than rendered as an empty cell.
+  const masked = useCrmMasking()
 
   // Typing in the search box should not fire a request per keystroke.
   useEffect(() => {
@@ -161,16 +209,19 @@ export default function CrmDeskPage() {
     setLoadingAgg(true)
     try {
       const q = aggParams().toString()
-      const [k, s, sch, meta] = await Promise.all([
+      const [k, s, ref, sch, meta] = await Promise.all([
         apiFetch<CrmKpi>(`/api/crm-desk/kpi?${q}`),
         apiFetch<DoctorScore[]>(`/api/crm-desk/doctor-scores?${q}`),
+        apiFetch<CrmReferralReport>(`/api/crm-desk/referrals?${q}`),
         apiFetch<ScheduleEntry[]>("/api/crm-desk/schedule"),
-        apiFetch<{ doctors: string[] }>("/api/crm-desk/meta"),
+        apiFetch<{ doctors: string[]; serviceCatalogue: ServiceSection[] }>("/api/crm-desk/meta"),
       ])
       setKpi(k)
       setScores(s)
+      setReferrals(ref)
       setSchedule(sch)
       setDoctors(meta.doctors)
+      setServiceCatalogue(meta.serviceCatalogue)
     } catch {
       toast.error("خطا در بارگذاری شاخص‌ها")
     } finally {
@@ -240,9 +291,26 @@ export default function CrmDeskPage() {
     }
   }
 
+  const exportSchedule = async () => {
+    try {
+      await apiDownload("/api/crm-desk/schedule/export", "برنامه-هفتگی-پزشکان.csv")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "خطا در دریافت خروجی")
+    }
+  }
+
   const exportScores = async () => {
     try {
       await apiDownload(`/api/crm-desk/doctor-scores/export?${aggParams()}`, "امتیازدهی-پزشکان-CRM.csv")
+      toast.success("خروجی آماده شد")
+    } catch {
+      toast.error("خطا در دریافت خروجی")
+    }
+  }
+
+  const exportReferrals = async () => {
+    try {
+      await apiDownload(`/api/crm-desk/referrals/export?${aggParams()}`, "گزارش-ارجاع-CRM.csv")
       toast.success("خروجی آماده شد")
     } catch {
       toast.error("خطا در دریافت خروجی")
@@ -294,6 +362,7 @@ export default function CrmDeskPage() {
           <TabsTrigger value="contacts">تماس‌های فالوآپ</TabsTrigger>
           <TabsTrigger value="survey">نظرسنجی</TabsTrigger>
           <TabsTrigger value="doctors">امتیازدهی پزشکان</TabsTrigger>
+          <TabsTrigger value="referrals">ارجاع و درمان</TabsTrigger>
           <TabsTrigger value="schedule">روزهای پزشکان</TabsTrigger>
         </TabsList>
 
@@ -327,13 +396,13 @@ export default function CrmDeskPage() {
                 />
                 <Stat
                   label="نرخ رزرو مجدد"
-                  value={kpi.rebookRate === null ? "—" : `${toPersianNum(kpi.rebookRate)}٪`}
+                  value={masked.rates ? MASKED_FIGURE : kpi.rebookRate === null ? "—" : `${toPersianNum(kpi.rebookRate)}٪`}
                   hint={`${toPersianNum(kpi.rebookCount)} درخواست وقت مجدد`}
                   icon={<Repeat className="size-4" />}
                 />
                 <Stat
                   label="نرخ پاسخگویی"
-                  value={kpi.answerRate === null ? "—" : `${toPersianNum(kpi.answerRate)}٪`}
+                  value={masked.rates ? MASKED_FIGURE : kpi.answerRate === null ? "—" : `${toPersianNum(kpi.answerRate)}٪`}
                   hint={`${toPersianNum(kpi.answeredContacts)} تماس پاسخ داده شده`}
                   icon={<Users className="size-4" />}
                 />
@@ -344,12 +413,17 @@ export default function CrmDeskPage() {
                   icon={<AlertTriangle className="size-4" />}
                   tone={kpi.atRiskCount > 0 ? "danger" : "positive"}
                 />
-                <Stat
-                  label="درآمد ثبت‌شده"
-                  value={formatRial(kpi.revenue, { withUnit: true })}
-                  hint="جمع مبالغ عددی ثبت‌شده در تماس‌ها"
-                  icon={<Stethoscope className="size-4" />}
-                />
+                {/* Dropped rather than shown masked: a KPI tile reading «———»
+                    is a hole in a grid of numbers, and the count beside it
+                    already says how much of the period it covers. */}
+                {!masked.amounts && (
+                  <Stat
+                    label="درآمد ثبت‌شده"
+                    value={formatRial(kpi.revenue ?? 0, { withUnit: true })}
+                    hint="جمع مبالغ عددی ثبت‌شده در تماس‌ها"
+                    icon={<Stethoscope className="size-4" />}
+                  />
+                )}
                 <Stat
                   label="بازه گزارش"
                   value={range.from || range.to ? `${dash(range.from)} تا ${dash(range.to)}` : "همه"}
@@ -491,6 +565,9 @@ export default function CrmDeskPage() {
                   <Button variant="outline" onClick={exportContacts}>
                     <Download className="size-4" /> خروجی اکسل
                   </Button>
+                  <Button variant="outline" onClick={() => setImportKind("contacts")}>
+                    <Upload className="size-4" /> ورود از فایل
+                  </Button>
                   <Button onClick={() => openNew(which === "survey" ? "SURVEY" : "FOLLOW_UP")}>
                     <Plus className="size-4" /> ثبت
                   </Button>
@@ -519,7 +596,8 @@ export default function CrmDeskPage() {
                           <TableHead>تاریخ مراجعه</TableHead>
                           <TableHead>تاریخ تماس</TableHead>
                           <TableHead>خدمات</TableHead>
-                          <TableHead>مبلغ</TableHead>
+                          <TableHead>ارجاع / درمان</TableHead>
+                          {!masked.amounts && <TableHead>مبلغ</TableHead>}
                           <TableHead>وقت‌دهی</TableHead>
                           <TableHead>پزشک</TableHead>
                           <TableHead>دستیار</TableHead>
@@ -547,7 +625,39 @@ export default function CrmDeskPage() {
                             <TableCell className="tabular-nums whitespace-nowrap">{dash(c.visitDate)}</TableCell>
                             <TableCell className="tabular-nums whitespace-nowrap">{toPersianNum(c.contactDate)}</TableCell>
                             <TableCell className="max-w-40 truncate" title={c.serviceName ?? ""}>{dash(c.serviceName)}</TableCell>
-                            <TableCell className="max-w-32 truncate" title={c.amountText ?? ""}>{dash(c.amountText)}</TableCell>
+                            {/*
+                              One cell for the whole referral: who it went to,
+                              and — once it happens — who treated the patient
+                              and with what. Amber when nothing has come back
+                              yet, which is the state the desk has to act on.
+                            */}
+                            <TableCell className="max-w-56">
+                              {c.referredDoctorName ? (
+                                <div className="flex flex-col gap-0.5 text-xs">
+                                  <span className="whitespace-nowrap">→ {c.referredDoctorName}</span>
+                                  {c.treatmentDoctorName ? (
+                                    <span
+                                      className="truncate text-muted-foreground"
+                                      title={c.treatmentServiceNames.join("، ")}
+                                    >
+                                      درمان: {c.treatmentDoctorName}
+                                      {c.treatmentServiceNames.length > 0
+                                        ? ` — ${c.treatmentServiceNames.join("، ")}`
+                                        : ""}
+                                    </span>
+                                  ) : (
+                                    <span className="text-amber-600 dark:text-amber-400">
+                                      در انتظار درمان
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                "—"
+                              )}
+                            </TableCell>
+                            {!masked.amounts && (
+                              <TableCell className="max-w-32 truncate" title={c.amountText ?? ""}>{dash(c.amountText)}</TableCell>
+                            )}
                             <TableCell>{c.schedulingRating ? CRM_RATING_LABELS[c.schedulingRating] : "—"}</TableCell>
                             <TableCell>{c.doctorRating ? CRM_RATING_LABELS[c.doctorRating] : "—"}</TableCell>
                             <TableCell>{c.assistantRating ? CRM_RATING_LABELS[c.assistantRating] : "—"}</TableCell>
@@ -687,8 +797,137 @@ export default function CrmDeskPage() {
           </Card>
         </TabsContent>
 
+        {/* ── ارجاع و درمان ── */}
+        <TabsContent value="referrals" className="mt-4 flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-muted-foreground">
+              ارجاع پس از مشاوره بر پایه تماس‌های ثبت‌شده میز CRM — چه کسی ارجاع داده، به کدام پزشک،
+              و درمان نزد چه کسی و با چه خدمتی انجام شده.
+            </p>
+            <Button variant="outline" onClick={exportReferrals}>
+              <Download className="size-4" /> خروجی اکسل
+            </Button>
+          </div>
+
+          {loadingAgg || !referrals ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)}
+            </div>
+          ) : referrals.totalReferrals === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                در این بازه ارجاعی ثبت نشده است. هنگام ثبت تماس، بخش «درمان ارجاعی» را پر کنید.
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Stat
+                  label="کل ارجاع‌ها" value={formatCount(referrals.totalReferrals)}
+                  icon={<Stethoscope className="size-4" />}
+                />
+                <Stat
+                  label="درمان انجام‌شده" value={formatCount(referrals.treatedCount)}
+                  hint={
+                    referrals.completionRate === null
+                      ? undefined
+                      : `${toPersianNum(referrals.completionRate)}٪ از ارجاع‌ها`
+                  }
+                  icon={<HeartHandshake className="size-4" />}
+                />
+                <Stat
+                  label="در انتظار درمان" value={formatCount(referrals.pendingCount)}
+                  hint="ارجاع داده شده ولی درمانی ثبت نشده"
+                  icon={<AlertTriangle className="size-4" />}
+                />
+                <Stat
+                  label="درمان نزد پزشک دیگر" value={formatCount(referrals.redirectedCount)}
+                  hint="درمان توسط کسی جز پزشکِ ارجاع‌شده"
+                  icon={<Repeat className="size-4" />}
+                />
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">تفکیک بر پایه پزشک ارجاع‌شده</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>پزشک ارجاع‌شده</TableHead>
+                          <TableHead>ارجاع</TableHead>
+                          <TableHead>بیمار</TableHead>
+                          <TableHead>درمان‌شده</TableHead>
+                          <TableHead>در انتظار</TableHead>
+                          <TableHead>نرخ انجام</TableHead>
+                          <TableHead>ارجاع‌دهنده</TableHead>
+                          <TableHead>درمان توسط</TableHead>
+                          <TableHead>خدمات گرفته‌شده</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {referrals.byDoctor.map((d) => (
+                          <TableRow key={d.referredDoctorName}>
+                            <TableCell className="font-medium whitespace-nowrap">
+                              {d.referredDoctorName}
+                            </TableCell>
+                            <TableCell className="tabular-nums">{toPersianNum(d.referrals)}</TableCell>
+                            <TableCell className="tabular-nums">{toPersianNum(d.patients)}</TableCell>
+                            <TableCell className="tabular-nums">{toPersianNum(d.treated)}</TableCell>
+                            <TableCell className="tabular-nums">
+                              {d.pending > 0 ? (
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  {toPersianNum(d.pending)}
+                                </span>
+                              ) : (
+                                toPersianNum(0)
+                              )}
+                            </TableCell>
+                            <TableCell className={cn("tabular-nums font-semibold", ratingTone(d.completionRate))}>
+                              {d.completionRate === null ? "—" : `${toPersianNum(d.completionRate)}٪`}
+                            </TableCell>
+                            <TableCell><NameCounts items={d.fromDoctors} /></TableCell>
+                            <TableCell><NameCounts items={d.treatedBy} /></TableCell>
+                            <TableCell><NameCounts items={d.services} /></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {referrals.topServices.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">پرتکرارترین خدمات درمان ارجاعی</CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-wrap gap-2">
+                    {referrals.topServices.map((svc) => (
+                      <Badge key={svc.name} variant="secondary" className="gap-1.5">
+                        {svc.name}
+                        <span className="tabular-nums opacity-70">{toPersianNum(svc.count)}</span>
+                      </Badge>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          )}
+        </TabsContent>
+
         {/* ── روزهای پزشکان ── */}
-        <TabsContent value="schedule" className="mt-4">
+        <TabsContent value="schedule" className="mt-4 flex flex-col gap-4">
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={exportSchedule}>
+              <Download className="size-4" /> خروجی اکسل
+            </Button>
+            <Button variant="outline" onClick={() => setImportKind("schedule")}>
+              <Upload className="size-4" /> ورود از فایل
+            </Button>
+          </div>
           <DoctorScheduleGrid
             names={scheduleGrid.names}
             values={scheduleGrid.map}
@@ -703,8 +942,20 @@ export default function CrmDeskPage() {
         contact={editing}
         defaultKind={editing?.kind ?? defaultKind}
         doctors={doctors}
+        serviceCatalogue={serviceCatalogue}
         onSubmit={saveContact}
       />
+
+      {importKind && (
+        <ImportDialog
+          kind={importKind}
+          open
+          onOpenChange={(v) => { if (!v) setImportKind(null) }}
+          // An import writes contacts or the schedule; both live in these two
+          // loaders, so refreshing them covers either kind.
+          onImported={() => { void loadAggregates(); void loadContacts() }}
+        />
+      )}
     </div>
   )
 }

@@ -97,3 +97,20 @@ describe("hasAnyPermission", () => {
     expect(hasAnyPermission(["crm"], ["patients.view", "leads"])).toBe(false);
   });
 });
+
+describe("lead isolation", () => {
+  it("does not let `leads` imply `leads.all`", () => {
+    // `leads` is an agent's own queue plus the unassigned pool. If the coarse
+    // key implied the wide one, every agent would be back to reading every
+    // colleague's leads — the exact disclosure the split exists to remove.
+    expect(hasPermission(["leads"], "leads.all")).toBe(false);
+    expect(hasPermission(["leads", "leads.all"], "leads.all")).toBe(true);
+    expect(hasPermission(["*"], "leads.all")).toBe(true);
+  });
+
+  it("keeps the keys an agent still needs", () => {
+    // Claiming a lead out of the pool is an assignment, so agents keep it.
+    expect(hasPermission(["leads"], "leads.assign")).toBe(true);
+    expect(hasPermission(["leads"], "campaigns")).toBe(true);
+  });
+});

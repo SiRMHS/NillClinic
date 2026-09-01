@@ -5,6 +5,7 @@ import {
   churnRisk,
   jalaliToDate,
   jalaliToSqlDate,
+  joinCrmLabels,
   loyaltyScore,
   npsBucket,
   npsScore,
@@ -19,6 +20,22 @@ import {
 import { createEncryptFn, decrypt } from "../security/encryption.js";
 
 const encrypt = createEncryptFn();
+
+/**
+ * Trim, drop blanks, and de-duplicate a picked service list.
+ *
+ * The picker cannot produce duplicates, but an import or an API caller can, and
+ * a service counted twice on one contact would inflate every per-service tally
+ * that follows.
+ */
+function normalizeServiceList(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const name = raw.trim();
+    if (name) seen.add(name);
+  }
+  return [...seen];
+}
 
 type ContactRow = Prisma.CrmContactGetPayload<{
   include: { createdBy: { select: { id: true; fullName: true } } };
@@ -36,6 +53,7 @@ export interface CrmContactView {
   visitDate: string | null;
   contactDate: string;
   serviceName: string | null;
+  serviceNames: string[];
   amountText: string | null;
   amount: number | null;
   schedulingRating: CrmRating | null;
@@ -61,6 +79,10 @@ export interface CrmContactView {
   callCenterReferral: string | null;
   resurveyDate: string | null;
   resurveyResult: string | null;
+  referredDoctorName: string | null;
+  treatmentDoctorName: string | null;
+  treatmentServiceNames: string[];
+  treatmentDate: string | null;
   createdBy: { id: string; fullName: string | null } | null;
   createdAt: Date;
   // Derived — computed here so the table, the CSV and the KPI tiles cannot
@@ -110,6 +132,7 @@ export class CrmDeskService {
       visitDate: row.visitDate,
       contactDate: row.contactDate,
       serviceName: row.serviceName,
+      serviceNames: row.serviceNames,
       amountText: row.amountText,
       amount: this.toNumber(row.amount),
       ...ratings,
@@ -131,6 +154,10 @@ export class CrmDeskService {
       callCenterReferral: row.callCenterReferral,
       resurveyDate: row.resurveyDate,
       resurveyResult: row.resurveyResult,
+      referredDoctorName: row.referredDoctorName,
+      treatmentDoctorName: row.treatmentDoctorName,
+      treatmentServiceNames: row.treatmentServiceNames,
+      treatmentDate: row.treatmentDate,
       createdBy: row.createdBy,
       createdAt: row.createdAt,
       satisfaction: satisfactionPercent(ratings),
@@ -160,6 +187,25 @@ export class CrmDeskService {
     const where: Prisma.CrmContactWhereInput = {};
     if (q.kind) where.kind = q.kind;
     if (q.doctorName) where.doctorName = { contains: q.doctorName, mode: "insensitive" };
+    if (q.referredDoctorName) {
+      where.referredDoctorName = { contains: q.referredDoctorName, mode: "insensitive" };
+    }
+    // A service can sit on either side of the row — what the visit was for, or
+    // what the referred treatment delivered — and the filter means "this row is
+    // about that service", so both are searched. `serviceName` rather than the
+    // array covers the imported rows whose services were never split out.
+    if (q.serviceName) {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        {
+          OR: [
+            { serviceNames: { has: q.serviceName } },
+            { treatmentServiceNames: { has: q.serviceName } },
+            { serviceName: { contains: q.serviceName, mode: "insensitive" } },
+          ],
+        },
+      ];
+    }
     if (q.callResult) where.callResult = q.callResult;
 
     const from = q.from ? jalaliToSqlDate(q.from) : null;
@@ -188,6 +234,14 @@ export class CrmDeskService {
       where.callResult = { in: ["NO_ANSWER", "UNREACHABLE", "UNAVAILABLE", "WRONG_NUMBER"] };
     } else if (q.segment === "rebook") {
       where.rebookNote = { not: null };
+    } else if (q.segment === "referred") {
+      where.referredDoctorName = { not: null };
+    } else if (q.segment === "referred-pending") {
+      // Sent on, nothing recorded back. This is the desk's own worklist: the
+      // billed-lines report cannot show it, because a referral that never
+      // turned into a treatment leaves no line to report on.
+      where.referredDoctorName = { not: null };
+      where.treatmentDoctorName = null;
     }
 
     return where;
@@ -330,19 +384,45 @@ export class CrmDeskService {
     }
 
     const passthrough = [
-      "kind", "doctorName", "visitDate", "serviceName", "amountText", "amount",
+      "kind", "doctorName", "visitDate", "amountText", "amount",
       "schedulingRating", "doctorRating", "assistantRating", "receptionRating", "hygieneRating",
       "referralLikelihood", "revisitLikelihood", "channels", "callResult",
       "suggestion", "notes", "rebookNote",
       "resultsOnset", "sideEffect", "overallOpinion",
       "painSwelling", "delayComplaint", "positiveNote", "doctorReferral",
       "patientSummary", "callCenterReferral", "resurveyDate", "resurveyResult",
+      "referredDoctorName", "treatmentDoctorName", "treatmentDate",
     ] as const;
 
     for (const key of passthrough) {
       if (input[key] !== undefined) {
         (data as Record<string, unknown>)[key] = input[key];
       }
+    }
+
+    /**
+     * The picked services and their text rendering are written together.
+     *
+     * `serviceName` stays the single searchable, exportable form — every filter
+     * and every CSV column already reads it, and the rows imported from the
+     * spreadsheet only ever had it. Deriving it from the picked list here means
+     * the two cannot drift, and a client that sends only `serviceNames` gets a
+     * correct text column without having to build the string itself.
+     *
+     * A caller that sends `serviceName` alone (the CSV importer, and any old
+     * client) still writes it verbatim — free text is not thrown away just
+     * because it does not match the catalogue.
+     */
+    if (input.serviceNames !== undefined) {
+      const names = normalizeServiceList(input.serviceNames);
+      data.serviceNames = names;
+      data.serviceName = names.length > 0 ? joinCrmLabels(names) : (input.serviceName ?? null);
+    } else if (input.serviceName !== undefined) {
+      data.serviceName = input.serviceName;
+    }
+
+    if (input.treatmentServiceNames !== undefined) {
+      data.treatmentServiceNames = normalizeServiceList(input.treatmentServiceNames);
     }
 
     return data;
@@ -361,6 +441,35 @@ export class CrmDeskService {
       include: { createdBy: { select: { id: true, fullName: true } } },
     });
     return this.toView(created);
+  }
+
+  /**
+   * Bulk insert from an uploaded file.
+   *
+   * Rows go in one at a time rather than through `createMany`, because each one
+   * still has to resolve its patient by file number — that lookup is what stops
+   * an import from creating a second identity for a patient the clinic already
+   * knows. The whole batch runs in a transaction: a file that fails halfway
+   * leaves nothing behind, so the operator re-uploads the corrected file
+   * instead of hunting for which rows made it in.
+   */
+  async createMany(inputs: CrmContactInput[], userId: string | null): Promise<number> {
+    if (inputs.length === 0) return 0;
+
+    const prepared = await Promise.all(
+      inputs.map(async (input) => ({
+        ...((await this.toWriteData(input)) as Prisma.CrmContactUncheckedCreateInput),
+        kind: input.kind,
+        contactDate: input.contactDate,
+        contactAt: jalaliToDate(input.contactDate),
+        createdById: userId,
+      })),
+    );
+
+    await prisma.$transaction(
+      prepared.map((data) => prisma.crmContact.create({ data, select: { id: true } })),
+    );
+    return prepared.length;
   }
 
   async update(id: string, input: Partial<CrmContactInput>): Promise<CrmContactView | null> {
@@ -565,6 +674,185 @@ export class CrmDeskService {
       }
     });
     return this.schedule();
+  }
+
+  /**
+   * Fold imported rows into the existing grid.
+   *
+   * Unlike `saveSchedule`, which is the grid editor saving what is on screen,
+   * an import speaks only about the doctors in the file — anyone absent from it
+   * keeps the shifts they already had. `replace` is offered for the other
+   * reading, where the file *is* the new schedule.
+   */
+  async mergeSchedule(
+    entries: { doctorName: string; weekday: number; note: string | null }[],
+    mode: "merge" | "replace" = "merge",
+  ) {
+    const kept = entries
+      .filter((e) => e.note && e.note.trim() !== "")
+      .map((e) => ({ doctorName: e.doctorName.trim(), weekday: e.weekday, note: e.note!.trim() }));
+
+    await prisma.$transaction(async (tx) => {
+      if (mode === "replace") {
+        await tx.crmDoctorSchedule.deleteMany({});
+      } else if (kept.length > 0) {
+        // Only the doctors the file mentions are cleared, so a doctor whose row
+        // dropped a day in Excel loses that day rather than keeping a stale one.
+        await tx.crmDoctorSchedule.deleteMany({
+          where: { doctorName: { in: [...new Set(kept.map((e) => e.doctorName))] } },
+        });
+      }
+      if (kept.length > 0) {
+        await tx.crmDoctorSchedule.createMany({ data: kept, skipDuplicates: true });
+      }
+    });
+
+    return this.schedule();
+  }
+
+  // ─── Referral reporting ───
+
+  /**
+   * Where consultations were sent, and what came back.
+   *
+   * Distinct from `ReferralService`, which reconstructs the same journey from
+   * billed lines. That report is authoritative on money and blind to anything
+   * unbilled; this one is the desk's own record, so it sees the referral the
+   * day it is made — including the ones that never turn into a treatment,
+   * which are precisely the rows worth chasing.
+   */
+  async referrals(q: Pick<CrmContactQuery, "from" | "to" | "kind">) {
+    const rows = (
+      await this.listAll({ ...q, segment: "all", page: 1, pageSize: 1 } as CrmContactQuery, 20000)
+    ).filter((r) => Boolean(r.referredDoctorName?.trim()));
+
+    interface Bucket {
+      referredDoctorName: string;
+      referrals: number;
+      treated: number;
+      pending: number;
+      /** Consulting doctors who sent patients here, biggest sender first. */
+      fromDoctors: Map<string, number>;
+      /** Who actually delivered the treatment — not always who it was sent to. */
+      treatedBy: Map<string, number>;
+      services: Map<string, number>;
+      patients: Set<string>;
+    }
+
+    const buckets = new Map<string, Bucket>();
+    const bump = (map: Map<string, number>, key: string | null | undefined) => {
+      const name = key?.trim();
+      if (name) map.set(name, (map.get(name) ?? 0) + 1);
+    };
+
+    for (const r of rows) {
+      const to = r.referredDoctorName!.trim();
+      const bucket = buckets.get(to) ?? {
+        referredDoctorName: to,
+        referrals: 0,
+        treated: 0,
+        pending: 0,
+        fromDoctors: new Map<string, number>(),
+        treatedBy: new Map<string, number>(),
+        services: new Map<string, number>(),
+        patients: new Set<string>(),
+      };
+
+      bucket.referrals += 1;
+      // Falls back to the row id so an anonymous walk-in still counts as one
+      // patient rather than collapsing every one of them into a single entry.
+      bucket.patients.add(String(r.patientExternalCode ?? r.patientName ?? r.id));
+      bump(bucket.fromDoctors, r.doctorName);
+
+      if (r.treatmentDoctorName?.trim()) {
+        bucket.treated += 1;
+        bump(bucket.treatedBy, r.treatmentDoctorName);
+      } else {
+        bucket.pending += 1;
+      }
+      for (const service of r.treatmentServiceNames) bump(bucket.services, service);
+
+      buckets.set(to, bucket);
+    }
+
+    const rank = (map: Map<string, number>, limit = 10) =>
+      [...map.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "fa"))
+        .slice(0, limit)
+        .map(([name, count]) => ({ name, count }));
+
+    const byDoctor = [...buckets.values()]
+      .map((b) => ({
+        referredDoctorName: b.referredDoctorName,
+        referrals: b.referrals,
+        patients: b.patients.size,
+        treated: b.treated,
+        pending: b.pending,
+        // Of the referrals sent here, how many produced a recorded treatment.
+        completionRate: b.referrals > 0 ? Math.round((b.treated / b.referrals) * 1000) / 10 : null,
+        fromDoctors: rank(b.fromDoctors),
+        treatedBy: rank(b.treatedBy),
+        services: rank(b.services),
+      }))
+      .sort((a, b) => b.referrals - a.referrals);
+
+    const treated = rows.filter((r) => Boolean(r.treatmentDoctorName?.trim()));
+    const serviceTotals = new Map<string, number>();
+    for (const r of rows) for (const service of r.treatmentServiceNames) bump(serviceTotals, service);
+
+    return {
+      totalReferrals: rows.length,
+      treatedCount: treated.length,
+      pendingCount: rows.length - treated.length,
+      completionRate: rows.length ? Math.round((treated.length / rows.length) * 1000) / 10 : null,
+      /**
+       * Referrals whose treatment was delivered by someone other than the doctor
+       * they were sent to. Small numbers are normal (cover, scheduling); a large
+       * share means the referral is not landing where the consultant intends.
+       */
+      redirectedCount: treated.filter(
+        (r) => r.treatmentDoctorName!.trim() !== r.referredDoctorName!.trim(),
+      ).length,
+      byDoctor,
+      topServices: rank(serviceTotals, 20),
+    };
+  }
+
+  // ─── Reference data for the entry form ───
+
+  /**
+   * The clinic's service catalogue, grouped by section.
+   *
+   * The form used to take services as free text, which meant the same procedure
+   * arrived spelled four ways and could not be grouped afterwards. The list is
+   * the synced `services` table — the same names the billing lines carry — so a
+   * CRM row and a reception line agree on what a service is called.
+   */
+  async serviceCatalogue(): Promise<{ section: string; services: string[] }[]> {
+    const rows = await prisma.service.findMany({
+      select: { name: true, sectionName: true },
+      orderBy: [{ sectionName: "asc" }, { name: "asc" }],
+    });
+
+    const bySection = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const name = row.name.trim();
+      if (!name) continue;
+      // The synced section is nullable-ish (blank on some rows); an unlabelled
+      // service still has to be pickable, so it gets its own group rather than
+      // being dropped.
+      const section = row.sectionName?.trim() || "سایر";
+      const set = bySection.get(section) ?? new Set<string>();
+      set.add(name);
+      bySection.set(section, set);
+    }
+
+    return [...bySection.entries()]
+      .sort(([a], [b]) => a.localeCompare(b, "fa"))
+      .map(([section, names]) => ({
+        section,
+        services: [...names].sort((a, b) => a.localeCompare(b, "fa")),
+      }));
   }
 
   /**

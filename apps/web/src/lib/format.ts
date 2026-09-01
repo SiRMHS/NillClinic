@@ -1,4 +1,32 @@
+import { MASKED_FIGURE } from "@jordan/shared"
+
 const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
+
+/**
+ * Site-wide money masking, held as a module flag rather than a React context.
+ *
+ * `formatRial` is called from dozens of components, several of them deep inside
+ * chart render callbacks and table cell factories that take no props from the
+ * page. Threading a context through all of them would be a large change for a
+ * value that is the same everywhere and changes about once a year, so the
+ * dashboard shell sets it once — before it renders anything — and the
+ * formatters read it. See stores/display.store.ts for who sets it.
+ *
+ * This is presentation only. The API strips the amounts it hides, so a masked
+ * viewer does not have the figures to begin with.
+ */
+let amountsAreHidden = false
+
+export function setAmountsHidden(hidden: boolean): void {
+  amountsAreHidden = hidden
+}
+
+export function areAmountsHidden(): boolean {
+  return amountsAreHidden
+}
+
+/** What a hidden figure reads as — see MASKED_FIGURE for why it is not blank. */
+export { MASKED_FIGURE }
 
 /** Latin digits → Persian digits, leaving separators and letters untouched. */
 export function toPersianNum(value: number | string): string {
@@ -15,6 +43,7 @@ export function formatCount(value: number): string {
  * Scale to میلیون/میلیارد and keep one decimal.
  */
 export function formatRial(value: number, opts: { withUnit?: boolean } = {}): string {
+  if (amountsAreHidden) return MASKED_FIGURE
   const withUnit = opts.withUnit ?? true
   const abs = Math.abs(value)
 
@@ -35,6 +64,7 @@ function stripTrailingZero(value: string): string {
 
 /** Exact amount with thousands separators — for tooltips and detail views. */
 export function formatRialExact(value: number): string {
+  if (amountsAreHidden) return MASKED_FIGURE
   return `${toPersianNum(Math.round(value).toLocaleString("en-US"))} ریال`
 }
 
