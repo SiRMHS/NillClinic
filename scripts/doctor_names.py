@@ -184,22 +184,16 @@ class DoctorNames:
         if not cleaned or NOT_A_NAME.match(cleaned):
             return ""
 
-        out, changed = [], False
+        out = []
         for part in SPLIT.split(cleaned):
             part = part.strip()
-            if not part:
+            if not part or NOT_A_NAME.match(part):
                 continue
-            resolved = self._resolve_one(part)
-            if resolved:
-                if resolved != part:
-                    changed = True
-                if resolved not in out:
-                    out.append(resolved)
-            elif NOT_A_NAME.match(part):
-                changed = True
-            else:
-                out.append(part)
-        if not out:
-            return ""
-        joined = "، ".join(out)
-        return joined if (changed or joined != str(raw).strip()) else joined
+            resolved = self._resolve_one(part) or part
+            if resolved not in out:
+                out.append(resolved)
+        # Sorted, so «الف، ب» and «ب، الف» are one doctor pair rather than two.
+        # The CRM groups its doctor scores on the whole cell, and the desk wrote
+        # the same two names in either order from one row to the next, so the
+        # written order carries nothing worth preserving.
+        return "، ".join(sorted(out))

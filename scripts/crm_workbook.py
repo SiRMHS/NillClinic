@@ -12,8 +12,13 @@ disagree about what a row means.
 Nothing here writes anywhere. It returns records.
 """
 import re
+import sys
+from pathlib import Path
 
 import openpyxl
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from doctor_names import DoctorNames  # noqa: E402
 
 RATING = {
     "عالی": "EXCELLENT", "عالیع": "EXCELLENT", "عایل": "EXCELLENT", "غالی": "EXCELLENT",
@@ -208,8 +213,17 @@ def data_rows(ws, width, blank_stop=50, start=2):
 WEEKDAYS = ["شنبه", "یکشنبه", "دوشنبه", "سه شنبه", "چهارشنبه", "پنج شنبه", "جمعه"]
 FALLBACK_DATE = "1405/05/30"
 
-def read_workbook(path):
-    """Parse the workbook into (contacts, schedule)."""
+def read_workbook(path, doctors=None):
+    """Parse the workbook into (contacts, schedule).
+
+    Practitioner names are resolved to the clinic's canonical spellings on the
+    way out — see doctor_names.py for why and for what is deliberately left
+    alone. Pass `doctors=DoctorNames([])` to keep the sheets verbatim.
+    """
+    doctors = DoctorNames.load() if doctors is None else doctors
+    def doctor(value):
+        return doctors.resolve(norm(value)) or None
+
     wb = openpyxl.load_workbook(path, data_only=True)
     records = []
 
@@ -285,7 +299,7 @@ def read_workbook(path):
                 "sheet": name.strip(),
                 "patientExternalCode": code(r[c_code]) if c_code is not None else None,
                 "patientName": norm(r[c_name]) if c_name is not None else None,
-                "doctorName": norm(r[c_doc]) if c_doc is not None else None,
+                "doctorName": doctor(r[c_doc]) if c_doc is not None else None,
                 "visitDate": jalali(r[c_visit]) if c_visit is not None else None,
                 "contactDate": contact_date,
                 "serviceName": norm(r[c_srv]) if c_srv is not None else None,
@@ -316,7 +330,7 @@ def read_workbook(path):
                 "sheet": sheet_name.strip(),
                 "patientExternalCode": code(g("شماره پرونده")),
                 "patientName": norm(g("نام مریض")),
-                "doctorName": norm(g("نام پزشک")),
+                "doctorName": doctor(g("نام پزشک")),
                 "visitDate": jalali(g("تاریخ مراجعه فرد")) if has_visit else None,
                 "contactDate": contact_date,
                 "serviceName": norm(g("خدماتی که انجام داده اند")),
@@ -379,7 +393,7 @@ def read_workbook(path):
             "sheet": "مراجعین رنوویون",
             "patientExternalCode": code(r[1]),
             "patientName": norm(r[2]),
-            "doctorName": norm(r[3]),
+            "doctorName": doctor(r[3]),
             "visitDate": jalali(r[4]),
             "contactDate": contact_date,
             "serviceName": norm(r[6]),
@@ -407,7 +421,7 @@ def read_workbook(path):
             "sheet": "مراجعین حضوری",
             "patientExternalCode": code(r[1]),
             "patientName": name,
-            "doctorName": norm(r[3]),
+            "doctorName": doctor(r[3]),
             # The sheet carries no date; these were logged as they happened and
             # the workbook's own last-modified date is the only anchor available.
             "contactDate": FALLBACK_DATE,
@@ -422,7 +436,7 @@ def read_workbook(path):
         return records, schedule
     width = max(ws.max_column, 2)
     header = cells(next(ws.iter_rows(max_row=1, values_only=True)), width)
-    doctors = [norm(c) for c in header[1:]]
+    rota_doctors = [doctor(c) for c in header[1:]]
     for r in data_rows(ws, width):
         weekday_name = norm(r[0])
         if not weekday_name:
@@ -430,10 +444,10 @@ def read_workbook(path):
         weekday = WEEKDAYS.index(weekday_name) if weekday_name in WEEKDAYS else None
         if weekday is None:
             continue
-        for i, doctor in enumerate(doctors):
+        for i, name in enumerate(rota_doctors):
             note = norm(r[i + 1])
-            if doctor and note:
-                schedule.append({"doctorName": doctor, "weekday": weekday, "note": note})
+            if name and note:
+                schedule.append({"doctorName": name, "weekday": weekday, "note": note})
 
     return records, schedule
 
