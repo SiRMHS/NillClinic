@@ -166,7 +166,7 @@ export default function ReferralsPage() {
         <div>
           <h1 className="text-2xl font-bold">ارجاع پس از مشاوره</h1>
           <p className="text-sm text-muted-foreground">
-            بیمارانی که مشاوره‌شان با یک پزشک بوده ولی درمان یا خدمت را پزشک دیگری انجام داده است
+            بیمارانی که مشاوره‌شان با یک پزشک بوده ولی خدمت را پزشک دیگری انجام داده است
           </p>
         </div>
         {canExport && (
@@ -238,7 +238,7 @@ export default function ReferralsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">پزشک درمان‌کننده:</span>
+            <span className="text-xs text-muted-foreground">پزشک انجام‌دهنده خدمت:</span>
             <Chip active={treatingDoctors.length === 0} onClick={() => { setTreatingDoctors([]); setPage(0) }}>
               همه
             </Chip>
@@ -296,7 +296,7 @@ export default function ReferralsPage() {
             />
             <Stat label="نرخ ارجاع" value={formatPercent(report.summary.referralRate)} />
             <Stat
-              label="درآمد درمان‌های ارجاعی"
+              label="درآمد خدمت‌های ارجاعی"
               value={`${formatRial(report.summary.treatmentRevenue)} ریال`}
               title={formatRialExact(report.summary.treatmentRevenue)}
             />
@@ -314,7 +314,7 @@ export default function ReferralsPage() {
                 «ارجاع» یعنی بیمار حداقل یک مشاوره با {report.summary.consultingDoctor} داشته و
                 سپس — از همان روز به بعد — خدمتی غیر از مشاوره را پزشک دیگری برایش انجام داده است.
                 {" "}
-                {formatCount(report.summary.retained)} بیمار را خودِ ایشان هم درمان کرده‌اند؛ این دو
+                {formatCount(report.summary.retained)} بیمار خدمت را از خودِ ایشان هم گرفته‌اند؛ این دو
                 گروه می‌توانند هم‌پوشانی داشته باشند.
               </span>
             </CardContent>
@@ -323,7 +323,7 @@ export default function ReferralsPage() {
           {report.byTreatingDoctor.length > 0 ? (
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">درمان ارجاعی نزد کدام پزشک انجام شده</CardTitle>
+                <CardTitle className="text-base">خدمت ارجاعی نزد کدام پزشک انجام شده</CardTitle>
               </CardHeader>
               <CardContent className="px-0">
                 <div className="overflow-x-auto">
@@ -332,7 +332,7 @@ export default function ReferralsPage() {
                       <TableRow>
                         <TableHead className="text-right">پزشک</TableHead>
                         <TableHead className="text-right">بیمار</TableHead>
-                        <TableHead className="text-right">درمان</TableHead>
+                        <TableHead className="text-right">خدمت</TableHead>
                         <TableHead className="text-right">درآمد</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -390,10 +390,10 @@ export default function ReferralsPage() {
                     <SortableHead label="بیمار" sortKey="name" sort={sort} onSort={onSort} defaultDirection="asc" />
                     <TableHead className="text-right">رتبه</TableHead>
                     <SortableHead label="تاریخ مشاوره" sortKey="consultationDate" sort={sort} onSort={onSort} />
-                    <TableHead className="text-right">پزشک درمان</TableHead>
+                    <TableHead className="text-right">پزشک خدمت</TableHead>
                     <TableHead className="text-right">خدمت گرفته‌شده</TableHead>
-                    <SortableHead label="تعداد درمان" sortKey="treatmentCount" sort={sort} onSort={onSort} />
-                    <SortableHead label="درآمد درمان" sortKey="treatmentReceived" sort={sort} onSort={onSort} />
+                    <SortableHead label="تعداد خدمت" sortKey="treatmentCount" sort={sort} onSort={onSort} />
+                    <SortableHead label="درآمد خدمت" sortKey="treatmentReceived" sort={sort} onSort={onSort} />
                     <SortableHead label="مجموع خرید" sortKey="lifetimeSpend" sort={sort} onSort={onSort} />
                   </TableRow>
                 </TableHeader>

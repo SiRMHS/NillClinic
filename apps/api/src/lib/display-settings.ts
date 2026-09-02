@@ -190,6 +190,7 @@ export const AMOUNT_FIELDS = [
   "revenuePerPatient",
   "revenuePerPayingPatient",
   "convertedRevenue",
+  "serviceRevenue",
   "treatmentRevenue",
   "treatmentReceived",
   "consultingDoctorReceived",

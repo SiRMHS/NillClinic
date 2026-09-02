@@ -474,7 +474,7 @@ export default function VisitorAnalyticsPage() {
                     <ExportButton dataset="doctors" from={from} to={to} />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    بر پایه نتیجه، نه صرفاً تعداد: درآمد، بیمار یکتا، نرخ بازگشت بیماران و نرخ تبدیل
+                    بر پایه نتیجه، نه صرفاً تعداد: درآمد، تعداد بیمار، نرخ بازگشت بیماران و نرخ تبدیل
                   </p>
                 </CardHeader>
                 <CardContent className="p-0">

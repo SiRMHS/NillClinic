@@ -77,6 +77,17 @@ describe("hasPermission", () => {
     expect(hasPermission(["sync"], "sync.run")).toBe(true);
   });
 
+  it("opens the CRM desk from either of its two keys", () => {
+    // The router gates the whole section on `crm.desk` while the writes gate on
+    // `crm.desk.manage`, so a role holding only the write key used to be denied
+    // the section — including the POST the key exists for.
+    expect(hasPermission(["crm.desk"], "crm.desk.manage")).toBe(true);
+    expect(hasPermission(["crm.desk.manage"], "crm.desk")).toBe(true);
+    // `crm` is the analytics page, a different section with different data.
+    expect(hasPermission(["crm"], "crm.desk")).toBe(false);
+    expect(hasPermission(["crm"], "crm.desk.manage")).toBe(false);
+  });
+
   it("keeps role editing separate from user management", () => {
     expect(hasPermission(["settings.users"], "settings.roles")).toBe(false);
     expect(hasPermission(["settings.roles"], "settings.users")).toBe(false);

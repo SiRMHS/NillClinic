@@ -166,8 +166,10 @@ reportsRouter.get("/doctors/report/export", requirePermission("reports.export"),
       { header: "تعداد خدمت", value: (r) => r.lineCount },
       { header: "تعداد بیمار", value: (r) => r.patientCount },
       { header: "بیمار جدید", value: (r) => r.newPatientCount },
+      { header: "مشاوره و ویزیت", value: (r) => r.consultationCount + r.visitCount },
       { header: "مشاوره", value: (r) => r.consultationCount },
-      { header: "درمان", value: (r) => r.treatmentCount },
+      { header: "ویزیت", value: (r) => r.visitCount },
+      { header: "خدمت", value: (r) => r.serviceCount },
       { header: "درآمد (ریال)", value: (r) => r.received, money: true },
       { header: "تخفیف (ریال)", value: (r) => r.discount, money: true },
       { header: "مانده (ریال)", value: (r) => r.outstanding, money: true },
@@ -207,7 +209,8 @@ reportsRouter.get("/doctors/report/export.xlsx", requirePermission("reports.expo
         : "بازه: کل دوره ثبت‌شده";
     const scope = [
       query.serviceKind === "consultation" ? "فقط مشاوره" : null,
-      query.serviceKind === "treatment" ? "فقط درمان" : null,
+      query.serviceKind === "visit" ? "فقط ویزیت" : null,
+      query.serviceKind === "service" ? "فقط خدمت" : null,
       query.tier ? `رتبه ${PATIENT_TIER_LABELS[query.tier] ?? query.tier}` : null,
       query.doctors?.length ? `${query.doctors.length} پزشک انتخاب‌شده` : null,
     ].filter(Boolean);
@@ -224,7 +227,7 @@ reportsRouter.get("/doctors/report/export.xlsx", requirePermission("reports.expo
         subtitle,
         rows: [
           { label: "تعداد پزشک", value: report.totals.doctorCount, format: FMT.count },
-          { label: "بیمار یکتا", value: report.totals.patientCount, format: FMT.count },
+          { label: "تعداد بیمار", value: report.totals.patientCount, format: FMT.count },
           { label: "تعداد پذیرش", value: report.totals.receptionCount, format: FMT.count },
           { label: "تعداد خط خدمت", value: report.totals.lineCount, format: FMT.count },
           { label: "درآمد کل (ریال)", value: report.totals.received, format: FMT.rial, money: true },
@@ -269,39 +272,56 @@ reportsRouter.get("/doctors/report/export.xlsx", requirePermission("reports.expo
     addSheet<Row>(
       wb,
       {
-        name: "مشاوره و درمان",
-        title: "تفکیک مشاوره و درمان",
+        name: "مشاوره و ویزیت",
+        title: "تفکیک مشاوره و ویزیت و خدمت",
         subtitle,
         totals: true,
         rows: report.rows,
         columns: [
           { header: "#", width: 6, align: "center", value: (_r, i) => i + 1, format: FMT.count },
           { header: "نام پزشک", width: 34, align: "right", value: (r) => r.doctorName },
-          { header: "مشاوره", width: 12, value: (r) => r.consultationCount, format: FMT.count, total: "sum" },
-          { header: "درمان", width: 12, value: (r) => r.treatmentCount, format: FMT.count, total: "sum" },
           {
-            header: "سهم مشاوره از کار",
-            width: 18,
-            /**
-             * Consultations as a share of this doctor's billed lines.
-             *
-             * Not treatments ÷ consultations, which was the obvious first
-             * try and is unreadable: these are line counts, so a doctor who
-             * mostly performs procedures scores 54100%, and one who only
-             * consults divides by a denominator that is barely there. A share
-             * of the whole stays on 0–100% and answers the question the split
-             * is actually for — is this a consulting doctor or an operating
-             * one.
-             */
-            value: (r) => {
-              const lines = r.consultationCount + r.treatmentCount;
-              return lines > 0 ? r.consultationCount / lines : null;
-            },
-            format: FMT.percent,
+            header: "مشاوره و ویزیت",
+            width: 15,
+            value: (r) => r.consultationCount + r.visitCount,
+            format: FMT.count,
+            total: "sum",
           },
+          { header: "مشاوره", width: 11, value: (r) => r.consultationCount, format: FMT.count, total: "sum" },
+          { header: "ویزیت", width: 11, value: (r) => r.visitCount, format: FMT.count, total: "sum" },
+          { header: "خدمت", width: 11, value: (r) => r.serviceCount, format: FMT.count, total: "sum" },
           { header: "بیمار", width: 11, value: (r) => r.patientCount, format: FMT.count, total: "sum" },
           { header: "بیمار جدید", width: 12, value: (r) => r.newPatientCount, format: FMT.count, total: "sum" },
           { header: "درآمد (ریال)", width: 18, value: (r) => r.received, format: FMT.rial, money: true, total: "sum" },
+        ],
+      },
+      hideMoney,
+    );
+
+    /**
+     * The same question asked of the entry services themselves.
+     *
+     * The sheet above answers it per doctor; this one answers it per way in, so
+     * «مشاوره زیبایی» and «ویزیت» are read separately instead of averaged into a
+     * rate that describes neither.
+     */
+    type EntryRow = (typeof report.entryConversion)[number];
+    addSheet<EntryRow>(
+      wb,
+      {
+        name: "تبدیل به خدمت",
+        title: "چند درصد از مشاوره‌ها و ویزیت‌ها به خدمت رسید",
+        subtitle,
+        totals: true,
+        rows: report.entryConversion,
+        columns: [
+          { header: "#", width: 6, align: "center", value: (_r, i) => i + 1, format: FMT.count },
+          { header: "نوع", width: 10, align: "center", value: (r) => (r.kind === "consultation" ? "مشاوره" : "ویزیت") },
+          { header: "عنوان", width: 38, align: "right", value: (r) => r.entryName },
+          { header: "بیمار", width: 11, value: (r) => r.patientCount, format: FMT.count, total: "sum" },
+          { header: "به خدمت رسید", width: 14, value: (r) => r.convertedCount, format: FMT.count, total: "sum" },
+          { header: "نرخ تبدیل", width: 12, value: (r) => r.conversionRate, format: FMT.percent },
+          { header: "درآمد خدمت (ریال)", width: 20, value: (r) => r.serviceRevenue, format: FMT.rial, money: true, total: "sum" },
         ],
       },
       hideMoney,
@@ -335,12 +355,12 @@ reportsRouter.get("/referrals/export", requirePermission("reports.export"), asyn
       { header: "رتبه", value: (r) => r.tierLabel ?? "" },
       { header: "تاریخ مشاوره", value: (r) => r.consultationDate ?? "" },
       { header: "تعداد مشاوره", value: (r) => r.consultationCount },
-      { header: "پزشک درمان", value: (r) => r.treatingDoctors.join(" | ") },
+      { header: "پزشک خدمت", value: (r) => r.treatingDoctors.join(" | ") },
       { header: "خدمات گرفته‌شده", value: (r) => r.treatmentServices.join(" | ") },
-      { header: "تعداد درمان", value: (r) => r.treatmentCount },
-      { header: "اولین درمان", value: (r) => r.firstTreatmentDate ?? "" },
-      { header: "آخرین درمان", value: (r) => r.lastTreatmentDate ?? "" },
-      { header: "درآمد درمان (ریال)", value: (r) => r.treatmentReceived, money: true },
+      { header: "تعداد خدمت", value: (r) => r.treatmentCount },
+      { header: "اولین خدمت", value: (r) => r.firstTreatmentDate ?? "" },
+      { header: "آخرین خدمت", value: (r) => r.lastTreatmentDate ?? "" },
+      { header: "درآمد خدمت (ریال)", value: (r) => r.treatmentReceived, money: true },
       { header: "درآمد پزشک مشاور (ریال)", value: (r) => r.consultingDoctorReceived, money: true },
       { header: "مجموع خرید بیمار (ریال)", value: (r) => r.lifetimeSpend, money: true },
     ], { hideMoney: displayMask(req).amounts });

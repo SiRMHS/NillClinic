@@ -36,8 +36,18 @@ interface DoctorRow {
   averagePerPatient: number
   averagePerReception: number
   consultationCount: number
-  treatmentCount: number
+  visitCount: number
+  serviceCount: number
   revenueShare: number
+}
+
+interface EntryConversionRow {
+  entryName: string
+  kind: "consultation" | "visit"
+  patientCount: number
+  convertedCount: number
+  conversionRate: number
+  serviceRevenue: number
 }
 
 interface Report {
@@ -52,6 +62,7 @@ interface Report {
     lineCount: number
   }
   sharedLineCount: number
+  entryConversion: EntryConversionRow[]
   generatedAt: string
 }
 
@@ -66,12 +77,13 @@ type SortKey =
   | "received" | "patients" | "receptions" | "lines"
   | "discount" | "outstanding" | "avgPerPatient" | "newPatients" | "name"
 
-type ServiceKind = "all" | "consultation" | "treatment"
+type ServiceKind = "all" | "consultation" | "visit" | "service"
 
 const SERVICE_KIND_LABELS: Record<ServiceKind, string> = {
-  all: "همه خدمات",
+  all: "همه",
   consultation: "فقط مشاوره",
-  treatment: "فقط درمان",
+  visit: "فقط ویزیت",
+  service: "فقط خدمت",
 }
 
 export default function DoctorReportPage() {
@@ -250,7 +262,7 @@ export default function DoctorReportPage() {
             value={`${formatRial(report.totals.received)} ریال`}
             title={formatRialExact(report.totals.received)}
           />
-          <Stat label="بیمار یکتا" value={formatCount(report.totals.patientCount)} />
+          <Stat label="تعداد بیمار" value={formatCount(report.totals.patientCount)} />
           <Stat label="پذیرش" value={formatCount(report.totals.receptionCount)} />
         </div>
       ) : null}
@@ -319,7 +331,7 @@ export default function DoctorReportPage() {
                       sort={sort}
                       onSort={onSort}
                     />
-                    <TableHead className="text-right">مشاوره / درمان</TableHead>
+                    <TableHead className="text-right">مشاوره و ویزیت / خدمت</TableHead>
                     <SortableHead
                       label="میانگین هر بیمار"
                       sortKey="avgPerPatient"
@@ -358,12 +370,15 @@ export default function DoctorReportPage() {
                       <TableCell className="tabular-nums">
                         {formatCount(r.receptionCount)}
                       </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                      <TableCell
+                        className="whitespace-nowrap text-xs tabular-nums"
+                        title={`مشاوره ${toPersianNum(r.consultationCount)} • ویزیت ${toPersianNum(r.visitCount)}`}
+                      >
                         <span className="text-sky-700 dark:text-sky-400">
-                          {formatCount(r.consultationCount)}
+                          {formatCount(r.consultationCount + r.visitCount)}
                         </span>
                         {" / "}
-                        <span>{formatCount(r.treatmentCount)}</span>
+                        <span>{formatCount(r.serviceCount)}</span>
                       </TableCell>
                       <TableCell
                         className="whitespace-nowrap tabular-nums"
@@ -388,6 +403,58 @@ export default function DoctorReportPage() {
           )}
         </CardContent>
       </Card>
+
+      {report && report.entryConversion.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">چند درصد از مشاوره‌ها و ویزیت‌ها به خدمت رسید</CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            <p className="px-6 pb-3 text-xs text-muted-foreground">
+              بیمار وقتی «به خدمت رسیده» شمرده می‌شود که در روز مشاوره یا ویزیت، یا پس از آن، خدمتی
+              در کلینیک گرفته باشد — لازم نیست همان پزشک انجامش داده باشد. فیلتر «نوع» بالای صفحه
+              روی این جدول اثر ندارد.
+            </p>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-right">نوع</TableHead>
+                    <TableHead className="text-right">عنوان</TableHead>
+                    <TableHead className="text-right">بیمار</TableHead>
+                    <TableHead className="text-right">به خدمت رسید</TableHead>
+                    <TableHead className="text-right">نرخ تبدیل</TableHead>
+                    <TableHead className="text-right">درآمد خدمت</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {report.entryConversion.map((e) => (
+                    <TableRow key={`${e.kind}-${e.entryName}`}>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        {e.kind === "consultation" ? "مشاوره" : "ویزیت"}
+                      </TableCell>
+                      <TableCell className="font-medium">{e.entryName}</TableCell>
+                      <TableCell className="tabular-nums">{formatCount(e.patientCount)}</TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatCount(e.convertedCount)}
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatPercent(e.conversionRate)}
+                      </TableCell>
+                      <TableCell
+                        className="whitespace-nowrap tabular-nums text-muted-foreground"
+                        title={formatRialExact(e.serviceRevenue)}
+                      >
+                        {formatRial(e.serviceRevenue)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   )
 }

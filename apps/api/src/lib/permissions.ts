@@ -35,11 +35,11 @@ export const AVAILABLE_PERMISSIONS: PermissionDef[] = [
   { key: "analytics", label: "تحلیل‌های عمومی", group: "گزارشات", hint: "رشد بیماران، کانال‌های جذب، کوهورت" },
   { key: "analytics.medical", label: "تحلیل درمانی", group: "گزارشات", hint: "ماتریس خدمات و پوشش طرح درمان" },
   { key: "analytics.doctors", label: "تحلیل پزشکان", group: "گزارشات", hint: "عملکرد تفکیکی هر پزشک" },
-  { key: "crm", label: "تحلیل مراجعین (CRM)", group: "گزارشات", hint: "بخش‌بندی و رفتار مراجعین" },
-  { key: "crm.desk", label: "میز CRM", group: "گزارشات", hint: "مشاهده تماس‌ها و نظرسنجی رضایت" },
-  { key: "crm.desk.manage", label: "ثبت و ویرایش تماس CRM", group: "گزارشات", hint: "افزودن، ویرایش و حذف رکورد میز CRM" },
+  { key: "crm", label: "تحلیل مراجعین", group: "گزارشات", hint: "صفحه «تحلیل مراجعین» — بخش‌بندی و رفتار مراجعین. ربطی به میز CRM ندارد" },
+  { key: "crm.desk", label: "میز CRM", group: "گزارشات", hint: "صفحه «CRM» — مشاهده تماس‌ها و نظرسنجی رضایت. برای ثبت تماس همین کلید کافی است" },
+  { key: "crm.desk.manage", label: "ثبت و ویرایش تماس CRM", group: "گزارشات", hint: "افزودن، ویرایش و حذف رکورد میز CRM — خودش «میز CRM» را هم باز می‌کند" },
   { key: "reports.doctors", label: "گزارش پزشکان", group: "گزارشات", hint: "گزارش نوبت و عملکرد پزشکان" },
-  { key: "reports.referrals", label: "ارجاع پس از مشاوره", group: "گزارشات", hint: "مسیر بیمار از مشاوره تا درمان" },
+  { key: "reports.referrals", label: "ارجاع پس از مشاوره", group: "گزارشات", hint: "مسیر بیمار از مشاوره تا خدمت" },
   { key: "reports.export", label: "خروجی اکسل گزارش‌ها", group: "گزارشات", hint: "دانلود فایل گزارش‌های غیرمالی" },
 
   // ─── مالی ───
@@ -96,7 +96,14 @@ const PERMISSION_IMPLIES: Record<string, string[]> = {
     "reports.export",
   ],
   financial: ["financial.patients", "financial.tiers", "financial.export"],
+  // Both directions, deliberately. The desk key opens the whole section, and
+  // its writes are the section — a desk that can be read but not written to is
+  // not a mode the clinic ever asked for. The reverse arrow is the one that was
+  // missing: granting only «ثبت و ویرایش تماس CRM» left every request to
+  // /api/crm-desk failing the router's `crm.desk` gate, so the operator saw
+  // «دسترسی غیرمجاز» on the one action the key is named after.
   "crm.desk": ["crm.desk.manage"],
+  "crm.desk.manage": ["crm.desk"],
   sync: ["sync.run"],
   settings: [
     "settings.external-migration",

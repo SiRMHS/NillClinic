@@ -41,8 +41,45 @@ export const NON_DOCTOR_NAME_PATTERNS = [
   ".%",
 ] as const;
 
-/** Service names that represent a consultation rather than a treatment. */
+/**
+ * The two kinds of entry-point line, and everything else.
+ *
+ * The clinic's funnel is visible in the service catalogue itself: a line named
+ * ویزیت or مشاوره is a way *in* — the patient is being seen, nothing has been
+ * performed yet — and every other line is the work the clinic actually sells.
+ * The reports say خدمت for that third group rather than «درمان», because that
+ * is the word the catalogue, the receipt and the desk all use for it.
+ *
+ * ویزیت used to fall on the «درمان» side of a two-way split, which counted the
+ * clinic's single most common line (~36k of them) as delivered work and pushed
+ * every conversion figure the wrong way. It is its own class here, reported
+ * beside مشاوره rather than folded into it, because «چند درصد از ویزیت‌ها به
+ * خدمت رسید» is a different question from the same one about مشاوره.
+ */
 export const CONSULTATION_SERVICE_PATTERN = "%مشاوره%";
+export const VISIT_SERVICE_PATTERN = "%ویزیت%";
+
+/**
+ * The same two classes as regexes, for the queries that classify every line in
+ * range rather than filtering to one class.
+ *
+ * `service_name ~ 'مشاوره|ویزیت'` is one pass where two `ILIKE '%…%'` tests are
+ * two, and neither form can use an index — on the clinic's 400k lines that is
+ * the difference between two seconds and six.
+ */
+export const CONSULTATION_SERVICE_REGEX = "مشاوره";
+export const VISIT_SERVICE_REGEX = "ویزیت";
+export const ENTRY_SERVICE_REGEX = "مشاوره|ویزیت";
+
+/** The three-way classification the doctor report groups its line counts by. */
+export const REPORT_SERVICE_KINDS = ["consultation", "visit", "service"] as const;
+export type ReportServiceKind = (typeof REPORT_SERVICE_KINDS)[number];
+
+export const REPORT_SERVICE_KIND_LABELS: Record<ReportServiceKind, string> = {
+  consultation: "مشاوره",
+  visit: "ویزیت",
+  service: "خدمت",
+};
 
 export const doctorSchema = z.object({
   name: z.string(),
@@ -67,10 +104,12 @@ export const doctorReportRowSchema = z.object({
   outstanding: z.number(),
   averagePerPatient: z.number(),
   averagePerReception: z.number(),
-  /** Lines whose service is a consultation. */
+  /** Lines named مشاوره. */
   consultationCount: z.number(),
-  /** Lines that are actual treatment. */
-  treatmentCount: z.number(),
+  /** Lines named ویزیت — an entry point too, counted apart from مشاوره. */
+  visitCount: z.number(),
+  /** Lines that are neither: the billable work, called خدمت on the report. */
+  serviceCount: z.number(),
   /** Share of clinic revenue in the range. */
   revenueShare: z.number(),
 });
@@ -96,8 +135,15 @@ export const doctorReportQuerySchema = financialRangeSchema.extend({
     z.array(z.string().trim().min(1)).optional(),
   ),
   tier: patientTierSchema.optional(),
-  /** Limit the lines to consultations, or to everything that is not one. */
-  serviceKind: z.enum(["all", "consultation", "treatment"]).default("all"),
+  /**
+   * Narrow the report to one class of line. `treatment` is the name the
+   * three-way split replaced; it is still accepted so a bookmarked filter or a
+   * saved link keeps working instead of 400-ing.
+   */
+  serviceKind: z.preprocess(
+    (v) => (v === "treatment" ? "service" : v),
+    z.enum(["all", ...REPORT_SERVICE_KINDS]).default("all"),
+  ),
   sort: doctorReportSortKeySchema.default("received"),
   direction: z.enum(["asc", "desc"]).default("desc"),
   limit: z.coerce.number().int().min(1).max(500).default(100),
@@ -112,6 +158,26 @@ export const doctorTrendPointSchema = z.object({
   receptionCount: z.number(),
 });
 export type DoctorTrendPoint = z.infer<typeof doctorTrendPointSchema>;
+
+/**
+ * Conversion for one entry service.
+ *
+ * A patient counts as converted when they received a خدمت on or after the day
+ * of that entry line — same day included, because at this clinic the ویزیت and
+ * the procedure routinely share a single reception. The denominator is patients
+ * seen under that entry service inside the range, so a patient seen twice is
+ * one, and a patient seen under both مشاوره and ویزیت is counted in each row.
+ */
+export const entryConversionRowSchema = z.object({
+  entryName: z.string(),
+  kind: z.enum(["consultation", "visit"]),
+  patientCount: z.number(),
+  convertedCount: z.number(),
+  conversionRate: z.number(),
+  /** What the converted patients then spent on خدمت. */
+  serviceRevenue: z.number(),
+});
+export type EntryConversionRow = z.infer<typeof entryConversionRowSchema>;
 
 export const doctorReportSchema = z.object({
   rows: z.array(doctorReportRowSchema),
@@ -130,6 +196,12 @@ export const doctorReportSchema = z.object({
    * to clinic revenue.
    */
   sharedLineCount: z.number(),
+  /**
+   * «چند درصد از مشاوره‌ها و ویزیت‌ها خدمت شد» — one row per entry service, so
+   * مشاوره زیبایی and ویزیت مجدد are answered separately rather than averaged
+   * into a single number that describes neither.
+   */
+  entryConversion: z.array(entryConversionRowSchema),
   generatedAt: z.string(),
 });
 export type DoctorReport = z.infer<typeof doctorReportSchema>;

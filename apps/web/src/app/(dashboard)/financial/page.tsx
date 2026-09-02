@@ -403,7 +403,7 @@ export default function FinancialPage() {
               icon={<Banknote className="size-4" />}
             />
             <KpiCard
-              title="بیماران یکتا"
+              title="تعداد بیمار"
               value={formatCount(summary.uniquePatients)}
               hint={`${formatCount(summary.lineCount)} سطر خدمت`}
               icon={<Users className="size-4" />}
